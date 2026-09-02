@@ -598,8 +598,18 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>Fetch a text document — the manifest. Same client, same limits.</summary>
-    internal static async System.Threading.Tasks.Task<string> FetchTextAsync(
+    internal static System.Threading.Tasks.Task<string> FetchTextAsync(
         string url, params (string Name, string Value)[] headers)
+        => FetchTextAsync(url, expectHtml: false, headers);
+
+    /// <param name="expectHtml">
+    /// ⚠ The web-page guard below exists so that pasting a *page* link where a data file was
+    /// wanted gives a useful error instead of a parser complaining about "&lt;". An album is
+    /// read from a real web page on purpose, so it has to opt out — otherwise the guard
+    /// rejects the one caller that legitimately wants HTML, which is exactly what it did.
+    /// </param>
+    internal static async System.Threading.Tasks.Task<string> FetchTextAsync(
+        string url, bool expectHtml, params (string Name, string Value)[] headers)
     {
         var resolved = ResolveTextUrl(url);
 
@@ -619,7 +629,7 @@ public sealed class Plugin : IDalamudPlugin
         // ⚠ Catch the web-page case here, where we can say something useful, instead of
         // letting the JSON parser complain about an unexpected "<" at position 0 — an
         // error that tells the reader nothing about what they actually did wrong.
-        if (body.TrimStart().StartsWith('<'))   // HTML, not the file itself
+        if (!expectHtml && body.TrimStart().StartsWith('<'))
             throw new InvalidOperationException(
                 "That link returned a web page, not the file itself. Use the raw link — " +
                 "on Pastebin that is the RAW button; on GitHub or a gist, the Raw button.");

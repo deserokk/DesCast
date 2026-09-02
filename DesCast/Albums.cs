@@ -131,6 +131,7 @@ internal sealed class Albums
     {
         var html = await Plugin.FetchTextAsync(
             $"https://imgur.com/a/{albumId}/embed?pub=true",
+            expectHtml: true,
             ("Accept", "text/html")).ConfigureAwait(false);
 
         var images = new List<string>();
