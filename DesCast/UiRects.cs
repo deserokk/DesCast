@@ -54,6 +54,13 @@ internal static unsafe class UiRects
         "_ActionBar", "_ActionBar01", "_ActionBar02", "_ActionBar03", "_ActionBar04",
         "_ActionBar05", "_ActionBar06", "_ActionBar07", "_ActionBar08", "_ActionBar09",
         "_ActionBarEx", "_ActionCross",
+        // ⭐ Target info. Chris: people target and examine each other constantly in a
+        // house, so this being readable matters more here than most of the combat HUD.
+        // ⚠ The game splits it into three addons when "display target info independently"
+        // is on and uses one when it is not, so both arrangements are listed.
+        "_TargetInfo",
+        "_TargetInfoMainTarget", "_TargetInfoCastBar", "_TargetInfoBuffDebuff",
+        "_FocusTargetInfo",
         "_ParameterWidget", // HP and MP
         "_MainCommand",     // the menu along the bottom
         "_NaviMap",         // minimap
