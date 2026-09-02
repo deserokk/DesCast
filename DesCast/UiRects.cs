@@ -127,10 +127,23 @@ internal static unsafe class UiRects
             {
                 if ((node->NodeFlags & NodeFlags.Visible) == 0) continue;
 
+                // ⚠⚠ Only nodes that actually paint pixels count toward the box.
+                //
+                // Container and collision nodes are flagged visible and sized to the whole
+                // addon whether or not anything inside them draws — so unioning them just
+                // reproduces the reserved rectangle this was meant to replace, which is
+                // exactly what it did. Images, text and nine-grids are the things a person
+                // can see; everything else is scaffolding.
+                var paints = node->Type is NodeType.Image or NodeType.Text
+                                          or NodeType.NineGrid or NodeType.Counter;
+
+                // ⚠ And a fully transparent node paints nothing, whatever its type.
+                if (paints && node->Alpha_2 == 0) paints = false;
+
                 var w = node->Width * node->ScaleX;
                 var h = node->Height * node->ScaleY;
 
-                if (w > 0f && h > 0f)
+                if (paints && w > 0f && h > 0f)
                 {
                     if (node->ScreenX < left) left = node->ScreenX;
                     if (node->ScreenY < top) top = node->ScreenY;
