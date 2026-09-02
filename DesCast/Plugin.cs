@@ -764,6 +764,42 @@ public sealed class Plugin : IDalamudPlugin
     /// Whether this looks like a bare Pastebin id: exactly eight letters and digits, with
     /// at least one digit and one letter so ordinary words are not mistaken for one.
     /// </summary>
+    /// <summary>
+    /// Reduce a pasted address to the short code, when it has one.
+    ///
+    /// ⭐⭐ From testing with Bunny, 2026-09-02. She was told "just the last eight
+    /// characters" and did what anybody would: pasted the whole address. It worked — the
+    /// resolver already understood it — but the box kept a long string, so **she never saw
+    /// the code**, could not read it out to anyone, and the shape never became familiar.
+    ///
+    /// ⭐⭐⭐ The framing that made it land instantly was hers: *"oh, it’s like a Mare
+    /// code."* That model is already in every FFXIV player’s head, whatever their comfort
+    /// with tech, so the interface should look like the thing they already understand rather
+    /// than teach a new one. Collapsing on input is what makes the box agree with the
+    /// explanation.
+    ///
+    /// ⚠ Only paste-shaped links reduce. A gist or a raw GitHub address needs its full
+    /// path to identify a file, so those are returned untouched rather than mangled into
+    /// something that no longer resolves.
+    /// </summary>
+    internal static string CollapseToCode(string input)
+    {
+        var text = (input ?? string.Empty).Trim().Trim('"');
+        if (text.Length == 0) return text;
+
+        if (IsPasteId(text)) return text;
+
+        var probe = text.Contains("://") ? text : "https://" + text;
+        if (!Uri.TryCreate(probe, UriKind.Absolute, out var uri)) return text;
+
+        if (!uri.Host.EndsWith("pastebin.com", StringComparison.OrdinalIgnoreCase)) return text;
+
+        var seg = uri.AbsolutePath.Trim('/').Split('/');
+        var last = seg.Length > 0 ? seg[^1] : string.Empty;
+
+        return IsPasteId(last) ? last : text;
+    }
+
     internal static bool IsPasteId(string s)
     {
         if (s.Length != 8) return false;

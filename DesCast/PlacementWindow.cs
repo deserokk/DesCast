@@ -215,7 +215,7 @@ public sealed class PlacementWindow : Window
             ImGui.SetNextItemWidth(300f);
             if (ImGui.InputText("##murl", ref editable, 512))
             {
-                cfg.ManifestUrls[i2] = editable.Trim();
+                cfg.ManifestUrls[i2] = Plugin.CollapseToCode(editable);
                 cfg.Save();
             }
 
@@ -242,17 +242,19 @@ public sealed class PlacementWindow : Window
             cfg.Save();
         }
 
-        if (ImGui.Button("Subscribe to a room"))
+        if (ImGui.Button("Add a room code"))
         {
             cfg.ManifestUrls.Add(string.Empty);
             cfg.Save();
         }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(
-                "A link to a file listing screens. Everyone pointed at the same link sees " +
-                "the same room, and it stays there whether or not whoever placed it is " +
-                "online.\n\nSubscribe to several: the company hall from your officers, and " +
-                "each private room from whoever lives in it.");
+                "An eight-character code for a room \u2014 like a Mare code. Everyone using the " +
+                "same one sees the same room, and it stays there whether or not whoever " +
+                "placed it is online.\n\nPaste the whole link if that is what you were " +
+                "given; it will be shortened to the code for you.\n\nAdd several: the " +
+                "company hall from your officers, and each private room from whoever " +
+                "lives in it.");
 
         if (cfg.ManifestUrls.Count > 0)
         {
@@ -286,7 +288,7 @@ public sealed class PlacementWindow : Window
                 ImGui.SetNextItemWidth(300f);
                 if (ImGui.InputText("##be", ref entry, 512))
                 {
-                    cfg.BuilderEntries[i] = entry.Trim();
+                    cfg.BuilderEntries[i] = Plugin.CollapseToCode(entry);
                     cfg.Save();
                 }
                 ImGui.SameLine();

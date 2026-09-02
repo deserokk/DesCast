@@ -4,6 +4,22 @@ All of this shipped on 2026-09-01, in one evening, with Bunny and Q testing live
 reasons matter more than the version numbers — most of these are bugs that only appear
 when a second person uses the thing.
 
+## 0.4.4
+
+**Paste a whole link and it becomes the code.** From testing with Bunny: told "just the last
+eight characters", she pasted the entire address — as anyone would. It worked, because the
+resolver already understood it, but the box kept a long string, so she never saw the code
+and could not read it back to anyone.
+
+⭐ The framing that made it land was hers: *"oh, it's like a Mare code."* Every FFXIV player
+already holds that model regardless of how tech-averse they are, so the interface now looks
+like the thing they know — the button says **Add a room code**, the tooltip names the
+comparison, and a pasted paste-link collapses to its eight characters so what you see agrees
+with what you were told.
+
+⚠ Only paste-shaped links reduce. Gists and raw GitHub addresses need their full path to
+identify a file, so those are left untouched.
+
 ## 0.4.3
 
 **Pictures are released when you leave.** Nothing was ever released before this — the cache
