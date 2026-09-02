@@ -54,16 +54,19 @@ internal static unsafe class UiRects
                 // whether anything is actually on screen.
                 if (unit->Alpha == 0) continue;
 
-                // ⚠⚠ Ask the game for the window's bounds rather than measuring the root
-                // node. A root node is the addon's declared canvas and is routinely far
-                // larger than what it draws — the party list's is big enough to punch a
-                // hole most of the way across a screen, which is exactly what the first
-                // version did.
-                FFXIVClientStructs.FFXIV.Common.Math.Bounds bounds;
-                unit->GetWindowBounds(&bounds);
-
-                float left = bounds.Pos1.X, top = bounds.Pos1.Y;
-                float right = bounds.Pos2.X, bottom = bounds.Pos2.Y;
+                // ⚠⚠ Measure what the panel actually draws, not the box it reserves.
+                //
+                // Two earlier attempts were wrong in the same direction. The root node is
+                // an addon's declared canvas and is routinely far bigger than its content
+                // — the party list's is wide enough to punch a hole across a screen. And
+                // the window bounds still cover reserved-but-empty panels: the debuff
+                // tray sits in the middle of the display at all times, drawing nothing
+                // when you have no debuffs, and took a bite out of a poster for it.
+                //
+                // Unioning the visible children answers the real question — is there
+                // anything here to cover up? — and an empty tray contributes nothing.
+                if (!VisibleContentBounds(unit->RootNode, out var left, out var top, out var right, out var bottom))
+                    continue;
 
                 var w = right - left;
                 var h = bottom - top;
@@ -89,5 +92,58 @@ internal static unsafe class UiRects
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// Union of the screen bounds of everything actually drawn under <paramref name="root"/>.
+    /// Returns false when nothing is — an empty panel, which must not be culled against.
+    ///
+    /// ⚠ Node-budgeted. This runs every frame across every loaded addon, and some of them
+    /// have deep trees; a fixed ceiling keeps a pathological one from turning the draw path
+    /// into a tree walk. Running out early only means a slightly loose box, never a hang.
+    /// </summary>
+    private static bool VisibleContentBounds(
+        AtkResNode* root, out float left, out float top, out float right, out float bottom)
+    {
+        left = top = float.MaxValue;
+        right = bottom = float.MinValue;
+
+        if (root == null || (root->NodeFlags & NodeFlags.Visible) == 0) return false;
+
+        var budget = 96;
+        var any = false;
+
+        // Iterative rather than recursive: an unexpected cycle in game data would take the
+        // whole game down with a stack overflow, and there is no catching that.
+        var stack = stackalloc nint[32];
+        var depth = 0;
+        stack[depth++] = (nint)root->ChildNode;
+
+        while (depth > 0 && budget > 0)
+        {
+            var node = (AtkResNode*)stack[--depth];
+
+            for (; node != null && budget-- > 0; node = node->PrevSiblingNode)
+            {
+                if ((node->NodeFlags & NodeFlags.Visible) == 0) continue;
+
+                var w = node->Width * node->ScaleX;
+                var h = node->Height * node->ScaleY;
+
+                if (w > 0f && h > 0f)
+                {
+                    if (node->ScreenX < left) left = node->ScreenX;
+                    if (node->ScreenY < top) top = node->ScreenY;
+                    if (node->ScreenX + w > right) right = node->ScreenX + w;
+                    if (node->ScreenY + h > bottom) bottom = node->ScreenY + h;
+                    any = true;
+                }
+
+                if (node->ChildNode != null && depth < 32)
+                    stack[depth++] = (nint)node->ChildNode;
+            }
+        }
+
+        return any;
     }
 }
