@@ -90,11 +90,12 @@ public sealed class PlacementWindow : Window
         if (cfg.CompanyBoardSeenAt is null)
         {
             ImGui.TextColored(new Vector4(0.65f, 0.8f, 1f, 1f),
-                "Open your Free Company window once to pick up your company's screens.");
+                "Your company's screens arrive next time you log in.");
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(
-                    "The game only hands the board text to plugins after that window has " +
-                    "been opened. It is remembered afterwards, so this is a one-time thing.");
+                    "The game announces the company board in chat at login, and it is read " +
+                    "from there.\n\nIf you would rather not wait, opening your Free Company " +
+                    "window once also does it. Either way it is remembered afterwards.");
         }
         else if (cfg.CompanyBoardUrls.Count == 0)
         {

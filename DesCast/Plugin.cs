@@ -652,6 +652,7 @@ public sealed class Plugin : IDalamudPlugin
         content.Clear();
         testCard?.Dispose();
 
+        Board.Dispose();
         Renderer.Dispose();
         Game.Dispose();
     }

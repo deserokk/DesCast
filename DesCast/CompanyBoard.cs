@@ -13,17 +13,20 @@ namespace DesCast;
 /// **editable only by ranks with the permission**, enforced by the game rather than by us.
 /// No account, no token, no service, no config to hand around.
 ///
-/// ⚠⚠ It is only readable once the Free Company window has been opened in this session.
-/// Measured, not assumed: cold it is empty, <c>InfoProxyFreeCompany.RequestData()</c>
-/// returns false, and the whole company dataset — roster, counts, board — arrives together
-/// the moment the window opens. Forcing that would mean reverse-engineering native code to
-/// find what gates the request.
+/// ⭐⭐⭐ <b>The game prints the board into chat at login, so usually there is nothing to
+/// do at all.</b> Spotted by Chris 2026-09-01 in a login screenshot, after an afternoon of
+/// working around the agent. Listening costs nothing, sends nothing, and needs no window
+/// opened — it simply arrives.
 ///
-/// ⭐ Which is not worth doing, because <b>the board is a pointer and pointers do not
-/// change.</b> It says where the manifest lives; the manifest itself is refetched every
-/// few minutes over HTTP with no game involvement. So this needs reading roughly once,
-/// ever — we cache what we find and tell the user to open the window once if we have
-/// nothing.
+/// ⚠ The agent path is kept as a fallback for anyone who loads the plugin mid-session and
+/// has therefore already missed the login message. It only works after the Free Company
+/// window has been opened: measured, not assumed — cold the agent is empty,
+/// <c>InfoProxyFreeCompany.RequestData()</c> returns false, and the whole company dataset
+/// arrives together the moment that window opens.
+///
+/// ⭐ Either way the result is cached permanently, because <b>the board is a pointer and
+/// pointers do not change.</b> It says where the manifest lives; the manifest itself is
+/// refetched every few minutes over HTTP with no game involvement.
 /// </summary>
 internal sealed unsafe class CompanyBoard
 {
@@ -40,7 +43,40 @@ internal sealed unsafe class CompanyBoard
     private readonly Configuration config;
     private string lastSeenRaw = string.Empty;
 
-    public CompanyBoard(Configuration config) => this.config = config;
+    public CompanyBoard(Configuration config)
+    {
+        this.config = config;
+        Plugin.Chat.ChatMessage += this.OnChatMessage;
+    }
+
+    public void Dispose() => Plugin.Chat.ChatMessage -= this.OnChatMessage;
+
+    /// <summary>
+    /// The board as the game announces it at login.
+    ///
+    /// ⚠⚠ <b>Sender must be empty.</b> This is the whole security of the thing: the login
+    /// announcement is a system message with no sender, while anything a player types
+    /// always has one. Without that check, someone standing next to you saying
+    /// "Company Board: Screens: &lt;their link&gt;" in open chat would put their pictures on
+    /// your walls. Matching on the text alone is not enough.
+    /// </summary>
+    private void OnChatMessage(Dalamud.Game.Chat.IHandleableChatMessage chat)
+    {
+        try
+        {
+            if (chat.Sender.TextValue.Length != 0) return;
+
+            var text = chat.Message.TextValue;
+            if (text.IndexOf("company board", StringComparison.OrdinalIgnoreCase) < 0) return;
+
+            Plugin.Log.Information($"Company board seen in chat (kind {chat.LogKind}).");
+            Accept(text);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning($"Company board chat read failed: {ex.Message}");
+        }
+    }
 
     /// <summary>
     /// Called every frame. ⚠ Cheap on purpose — a null check and a length compare — because
@@ -55,6 +91,13 @@ internal sealed unsafe class CompanyBoard
         var raw = agent->Board.ToString();
         if (string.IsNullOrEmpty(raw) || raw == lastSeenRaw) return;
 
+        Accept(raw);
+    }
+
+    /// <summary>Take board text from wherever it came and store anything useful in it.</summary>
+    private void Accept(string raw)
+    {
+        if (string.IsNullOrEmpty(raw) || raw == lastSeenRaw) return;
         lastSeenRaw = raw;
 
         var found = Parse(raw);
