@@ -507,6 +507,12 @@ public sealed class Plugin : IDalamudPlugin
         // still needs its full address, because its id alone does not identify the file.
         if (IsPasteId(url)) return $"https://pastebin.com/raw/{url}";
 
+        // ⚠ A bare "pastebin.com/raw/xxxx" is what a person writes on a notice board —
+        // nobody types the scheme by hand. Without it this never parses as an address and
+        // the fetch throws on something that looked perfectly correct to whoever wrote it.
+        if (!url.Contains("://") && url.Contains('.') && !url.Contains(' '))
+            url = "https://" + url;
+
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return url;
 
         var host = uri.Host.ToLowerInvariant();
