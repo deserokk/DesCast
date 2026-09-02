@@ -72,68 +72,70 @@ internal static unsafe class UiRects
     /// </summary>
     private const string GaugePrefix = "JobHud";
 
-    private static bool IsActionBar(string name)
-        => name.StartsWith("_ActionBar", StringComparison.Ordinal);
-
     /// <summary>
-    /// Rectangles for the individual buttons of one action bar, with touching buttons
-    /// merged into a single run.
+    /// Union the rectangles of everything a named addon actually paints, merging pieces
+    /// that touch.
     ///
-    /// ⭐ Merging matters twice over: a centred twelve-button row collapses to one
-    /// rectangle instead of twelve, and a bar split into clusters keeps the gaps between
-    /// them — which is exactly where Q keeps his job gauge.
+    /// ⭐⭐ This is the measurement from the earlier automatic attempt, which was right as a
+    /// measurement and wrong only in what it was applied to. Used on every addon it culled
+    /// panels that draw nothing; used on a named list it does exactly what is wanted —
+    /// tight bounds round real content, and nothing at all for an element we never listed.
     ///
-    /// ⚠ Slots 9 to 20 of the node list are the twelve buttons. That is a hard-coded layout
-    /// detail taken from Pictomancy, and it is the kind of thing a patch can move — if
-    /// hotbars start being covered oddly, suspect these indices first.
+    /// ⚠ Only nodes that paint count. Container and collision nodes are flagged visible and
+    /// sized to the whole addon whether or not anything inside them draws, which is how the
+    /// target info bar came to cut a band across the screen far wider than its label.
     /// </summary>
-    private static int CollectActionBarButtons(AtkUnitBase* unit, Span<Vector4> into)
+    private static int CollectPaintedNodes(AtkUnitBase* unit, Span<Vector4> into)
     {
-        const int firstSlot = 9, lastSlot = 20;
-        const float joinGap = 2f;   // buttons this close are treated as one run
+        const float joinGap = 3f;
 
-        var uld = &unit->UldManager;
-        if (uld->NodeList == null) return 0;
+        if (unit->RootNode == null || into.Length == 0) return 0;
 
-        Span<Vector4> buttons = stackalloc Vector4[lastSlot - firstSlot + 1];
-        var found = 0;
-
-        for (var slot = firstSlot; slot <= lastSlot && slot < uld->NodeListCount; slot++)
-        {
-            var node = uld->NodeList[slot];
-            if (node == null || (node->NodeFlags & NodeFlags.Visible) == 0) continue;
-
-            var w = node->Width * unit->Scale;
-            var h = node->Height * unit->Scale;
-            if (w <= 0f || h <= 0f) continue;
-
-            buttons[found++] = new Vector4(
-                node->ScreenX, node->ScreenY, node->ScreenX + w, node->ScreenY + h);
-        }
-
-        // Merge any button that touches one already accumulated. Buttons arrive in slot
-        // order, which is layout order, so a single pass catches every run.
         var count = 0;
-        for (var i = 0; i < found; i++)
+        var budget = 160;
+
+        var stack = stackalloc nint[32];
+        var depth = 0;
+        stack[depth++] = (nint)unit->RootNode->ChildNode;
+
+        while (depth > 0 && budget > 0)
         {
-            var b = buttons[i];
-            var merged = false;
+            var node = (AtkResNode*)stack[--depth];
 
-            for (var j = 0; j < count; j++)
+            for (; node != null && budget-- > 0; node = node->PrevSiblingNode)
             {
-                var e = into[j];
-                var overlaps = b.X <= e.Z + joinGap && b.Z >= e.X - joinGap
-                            && b.Y <= e.W + joinGap && b.W >= e.Y - joinGap;
-                if (!overlaps) continue;
+                if ((node->NodeFlags & NodeFlags.Visible) == 0) continue;
 
-                into[j] = new Vector4(
-                    MathF.Min(e.X, b.X), MathF.Min(e.Y, b.Y),
-                    MathF.Max(e.Z, b.Z), MathF.Max(e.W, b.W));
-                merged = true;
-                break;
+                if (node->ChildNode != null && depth < 32)
+                    stack[depth++] = (nint)node->ChildNode;
+
+                var paints = node->Type is NodeType.Image or NodeType.Text
+                                          or NodeType.NineGrid or NodeType.Counter;
+                if (!paints || node->Alpha_2 == 0) continue;
+
+                var w = node->Width * node->ScaleX * unit->Scale;
+                var h = node->Height * node->ScaleY * unit->Scale;
+                if (w <= 1f || h <= 1f) continue;
+
+                var r = new Vector4(node->ScreenX, node->ScreenY,
+                                    node->ScreenX + w, node->ScreenY + h);
+
+                var merged = false;
+                for (var j = 0; j < count; j++)
+                {
+                    var e = into[j];
+                    if (r.X > e.Z + joinGap || r.Z < e.X - joinGap
+                        || r.Y > e.W + joinGap || r.W < e.Y - joinGap) continue;
+
+                    into[j] = new Vector4(
+                        MathF.Min(e.X, r.X), MathF.Min(e.Y, r.Y),
+                        MathF.Max(e.Z, r.Z), MathF.Max(e.W, r.W));
+                    merged = true;
+                    break;
+                }
+
+                if (!merged && count < into.Length) into[count++] = r;
             }
-
-            if (!merged && count < into.Length) into[count++] = b;
         }
 
         return count;
@@ -174,26 +176,18 @@ internal static unsafe class UiRects
                 // buttons to one side and parks his job gauge in the gap he leaves — so a
                 // bar-shaped rectangle would cover the gauge sitting in the hole, and a
                 // good chunk of empty screen with it.
-                if (IsActionBar(name))
+                if (!isWindow)
                 {
-                    count += CollectActionBarButtons(unit, into[count..]);
+                    count += CollectPaintedNodes(unit, into[count..]);
                     continue;
                 }
 
-                float left = unit->X, top = unit->Y, w, h;
-
-                if (isWindow)
-                {
-                    // The frame's own node, which is tighter than the addon's canvas.
-                    var frame = &unit->WindowNode->AtkResNode;
-                    w = frame->Width * unit->Scale;
-                    h = frame->Height * unit->Scale;
-                }
-                else
-                {
-                    w = unit->RootNode->Width * unit->Scale;
-                    h = unit->RootNode->Height * unit->Scale;
-                }
+                // A window keeps its frame rectangle. The frame genuinely is the region it
+                // occupies, and unlike a HUD element there is no reserved empty space in it.
+                float left = unit->X, top = unit->Y;
+                var frame = &unit->WindowNode->AtkResNode;
+                var w = frame->Width * unit->Scale;
+                var h = frame->Height * unit->Scale;
 
                 if (w <= 0f || h <= 0f) continue;
 
