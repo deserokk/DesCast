@@ -74,7 +74,8 @@ public sealed class ScreenRenderer : IDisposable
         public Vector4 Flags2;   // x = interface rectangle count, y = brightness
         public Vector4 Grade;    // x contrast, y saturation, z edge softness, w clip-outside
         public Vector4 Tint;     // rgb tint
-        public Vector4 Uv;       // xy scale about the centre
+        public Vector4 Uv;       // xy scale about the centre, z half-thickness
+        public Vector4 Edge;     // rgb side colour
     }
 
     /// <summary>
@@ -106,6 +107,7 @@ cbuffer Params : register(b0)
     float4 Grade;
     float4 Tint;
     float4 Uv;
+    float4 Edge;
     float4 UiRects[64];
 };
 
@@ -139,19 +141,76 @@ float4 PSMain(VSOut i) : SV_Target
     float3 ay = AxisY.xyz;
     float3 n  = normalize(cross(ax, ay));
 
-    float denom = dot(dir, n);
-    if (abs(denom) < 1e-6) discard;          // ray parallel to the panel
+    float halfT = Uv.z;
+    float u, v, t;
+    bool onFace = true;
 
-    float t = dot(Center.xyz - CamPos.xyz, n) / denom;
-    if (t <= 0.0) discard;                    // panel is behind the eye
+    if (halfT < 0.0005)
+    {
+        // Flat panel: a plane, exactly as before. Kept as its own path so a screen with no
+        // thickness behaves identically to how it always has.
+        float denom = dot(dir, n);
+        if (abs(denom) < 1e-6) discard;
 
-    float3 hit   = CamPos.xyz + dir * t;
-    float3 local = hit - Center.xyz;
+        t = dot(Center.xyz - CamPos.xyz, n) / denom;
+        if (t <= 0.0) discard;
 
-    // Position within the panel, in units of half-width / half-height.
-    float u = dot(local, ax) / dot(ax, ax);
-    float v = dot(local, ay) / dot(ay, ay);
-    if (abs(u) > 1.0 || abs(v) > 1.0) discard;
+        float3 local = (CamPos.xyz + dir * t) - Center.xyz;
+        u = dot(local, ax) / dot(ax, ax);
+        v = dot(local, ay) / dot(ay, ay);
+        if (abs(u) > 1.0 || abs(v) > 1.0) discard;
+    }
+    else
+    {
+        // ⭐ A box, so the panel is an object rather than a decal. The picture lives on the
+        // front face; the sides are what make it read as mounted rather than floating, which
+        // is the entire reason for the feature — an image standing off a wall looks like a
+        // mistake until it has an edge.
+        //
+        // Slab method against the three axes. The box sits behind the picture plane, so the
+        // front face stays exactly where a flat panel would be and adding thickness never
+        // moves the image.
+        float lx = length(ax), ly = length(ay);
+        float3 nx = ax / lx, ny = ay / ly;
+        float3 c  = Center.xyz - n * halfT;
+
+        float tmin = -1e30, tmax = 1e30;
+        int axis = 2;
+
+        [unroll] for (int i = 0; i < 3; i++)
+        {
+            float3 a = (i == 0) ? nx : ((i == 1) ? ny : n);
+            float  h = (i == 0) ? lx : ((i == 1) ? ly : halfT);
+
+            float e = dot(a, c - CamPos.xyz);
+            float f = dot(a, dir);
+
+            if (abs(f) > 1e-6)
+            {
+                float t1 = (e + h) / f;
+                float t2 = (e - h) / f;
+                if (t1 > t2) { float sw = t1; t1 = t2; t2 = sw; }
+                if (t1 > tmin) { tmin = t1; axis = i; }
+                if (t2 < tmax) tmax = t2;
+                if (tmin > tmax) discard;
+            }
+            else if (-e - h > 0.0 || -e + h < 0.0) discard;
+        }
+
+        t = tmin;
+        if (t <= 0.0) discard;
+
+        float3 local = (CamPos.xyz + dir * t) - c;
+
+        // The picture is on the front face only: the slab hit on the normal axis, on the
+        // side facing out. Everything else is an edge.
+        onFace = (axis == 2) && (dot(local, n) > 0.0);
+
+        u = dot(local, nx) / lx;
+        v = dot(local, ny) / ly;
+    }
+
+    float3 hit = CamPos.xyz + dir * t;
 
     // Occlusion. The hit point is projected with the game's own view-projection, so its
     // depth is directly comparable with the depth buffer without any linearisation.
@@ -177,6 +236,13 @@ float4 PSMain(VSOut i) : SV_Target
         float4 box = UiRects[r];
         if (i.pos.x >= box.x && i.pos.x <= box.z && i.pos.y >= box.y && i.pos.y <= box.w)
             discard;
+    }
+
+    // Sides take a flat colour and none of the picture handling below.
+    if (!onFace)
+    {
+        float4 side = float4(Edge.rgb, Center.w);
+        return side;
     }
 
     float2 uv = float2(u * 0.5 + 0.5, 0.5 - v * 0.5);
@@ -391,6 +457,8 @@ float4 PSMain(VSOut i) : SV_Target
         float EdgeSoftness,
         Vector2 UvScale,
         bool ClipOutside,
+        float Thickness,
+        Vector3 EdgeColour,
         nint ContentSrv);
 
     /// <summary>
@@ -459,7 +527,8 @@ float4 PSMain(VSOut i) : SV_Target
                         Math.Clamp(panel.EdgeSoftness, 0f, 0.5f),
                         panel.ClipOutside ? 1f : 0f),
                     Tint = new Vector4(panel.Tint, 0f),
-                    Uv = new Vector4(panel.UvScale, 0f, 0f),
+                    Uv = new Vector4(panel.UvScale, MathF.Max(panel.Thickness, 0f) * 0.5f, 0f),
+                    Edge = new Vector4(panel.EdgeColour, 0f),
                 };
 
                 // ⭐ Only shade the pixels this panel can possibly cover. The pass is a
@@ -526,11 +595,19 @@ float4 PSMain(VSOut i) : SV_Target
         var ax = panel.AxisX;
         var ay = panel.AxisY;
 
-        Span<Vector3> corners = stackalloc Vector3[4];
+        // ⚠ Eight corners when the panel has depth, or the sides fall outside the scissor
+        // and get cut off — the edge would appear and disappear as the camera moved.
+        var back = Vector3.Normalize(Vector3.Cross(ax, ay)) * MathF.Max(panel.Thickness, 0f);
+
+        Span<Vector3> corners = stackalloc Vector3[8];
         corners[0] = c - ax + ay;
         corners[1] = c + ax + ay;
         corners[2] = c + ax - ay;
         corners[3] = c - ax - ay;
+        corners[4] = corners[0] - back;
+        corners[5] = corners[1] - back;
+        corners[6] = corners[2] - back;
+        corners[7] = corners[3] - back;
 
         float minX = float.MaxValue, minY = float.MaxValue;
         float maxX = float.MinValue, maxY = float.MinValue;

@@ -122,6 +122,16 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     internal static string NormalisePath(string raw) => raw.Trim().Trim('"');
 
+    /// <summary>The shape of the picture currently on a screen, or 0 while unknown.</summary>
+    internal float AspectOf(ScreenPlacement s)
+    {
+        var path = NormalisePath(s.CurrentSource(DateTimeOffset.UtcNow));
+        return !string.IsNullOrWhiteSpace(path)
+               && content.TryGetValue(path, out var e) && e.Wrap is not null
+            ? e.Aspect
+            : 0f;
+    }
+
     /// <summary>
     /// The height this screen is actually being drawn at, for the editor to display.
     /// Falls back to the stored height while the image is unknown or still decoding.
@@ -329,6 +339,8 @@ public sealed class Plugin : IDalamudPlugin
                 s.EdgeSoftness,
                 uvScale,
                 clipOutside,
+                s.Thickness,
+                s.EdgeColour,
                 handle));
         }
         if (drawList.Count == 0) return;

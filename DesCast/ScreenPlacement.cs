@@ -55,6 +55,47 @@ public class ScreenPlacement
     /// <summary>0 = invisible, 1 = solid. Multiplies the whole panel.</summary>
     public float Opacity { get; set; } = 1.0f;
 
+    /// <summary>
+    /// Named shapes, so an officer can be told "that board is 9:16, crop to fit" and know
+    /// what to make without measuring anything.
+    ///
+    /// ⭐ The paper sizes are there because a letter or notice laid on a table is a real use
+    /// and nobody knows A4 as a ratio. ⚠ Kept short on purpose — a list of thirty is a list
+    /// nobody reads, and the free width and height fields cover anything unusual.
+    /// </summary>
+    public static readonly (string Name, float W, float H)[] AspectPresets =
+    {
+        ("16:9  widescreen",     16f, 9f),
+        ("21:9  cinema",         21f, 9f),
+        ("4:3  classic",          4f, 3f),
+        ("1:1  square",           1f, 1f),
+        ("3:1  banner",           3f, 1f),
+        ("9:16  kiosk",           9f, 16f),
+        ("3:4  portrait",         3f, 4f),
+        ("2:3  poster",           2f, 3f),
+        ("A4 portrait",         210f, 297f),
+        ("A4 landscape",        297f, 210f),
+        ("Letter portrait",     8.5f, 11f),
+    };
+
+    /// <summary>
+    /// The panel's shape as a ratio, for display. ⭐ So the officer running the board can read
+    /// off what to hand people rather than being told to work it out.
+    /// </summary>
+    public string DescribeAspect(float imageAspect)
+    {
+        var h = HeightFor(imageAspect);
+        if (h <= 0.0001f) return "—";
+
+        var ratio = Width / h;
+
+        // Name it if it matches a preset closely enough; a hand-set size lands between them.
+        foreach (var (name, pw, ph) in AspectPresets)
+            if (MathF.Abs(ratio - pw / ph) < 0.01f) return name;
+
+        return $"{ratio:0.00} : 1";
+    }
+
     /// <summary>How a picture is mapped onto a panel that is not the same shape.</summary>
     public enum Fitting
     {
@@ -88,6 +129,22 @@ public class ScreenPlacement
     /// Multiplied into the picture's colour. ⭐ Warm for lamplight, cold for a hologram.
     /// </summary>
     public Vector3 Tint { get; set; } = Vector3.One;
+
+    /// <summary>
+    /// How far the panel stands out from its backing, in metres. 0 is a flat picture.
+    ///
+    /// ⭐⭐ Chris' reasoning, and it is the point of the feature: a flat image held off a wall
+    /// reads as a decal hovering in space, so the offset needed to stop it clipping through
+    /// scenery looks like a mistake. Give it an edge and it becomes a mounted plaque —
+    /// standing proud of the wall is simply how a hung object sits, and the offset stops
+    /// being a workaround and becomes the look.
+    ///
+    /// ⚠ Small values. Two or three centimetres is a picture frame; ten is a crate.
+    /// </summary>
+    public float Thickness { get; set; } = 0f;
+
+    /// <summary>Colour of the sides. ⭐ Dark by default, the way a frame or bezel reads.</summary>
+    public Vector3 EdgeColour { get; set; } = new(0.10f, 0.10f, 0.11f);
 
     /// <summary>
     /// Fades the outer edge of the panel, as a fraction of its size.

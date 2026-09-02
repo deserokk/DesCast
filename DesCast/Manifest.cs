@@ -79,6 +79,12 @@ public sealed class ManifestScreen
     [JsonProperty("saturation")] public float Saturation { get; set; } = 1f;
     [JsonProperty("edge")] public float EdgeSoftness { get; set; }
 
+    /// <summary>How far the panel stands out from its backing, in metres. 0 is flat.</summary>
+    [JsonProperty("thickness")] public float Thickness { get; set; }
+
+    /// <summary>Colour of the sides as [r, g, b]; omit for the default dark edge.</summary>
+    [JsonProperty("edgeColour")] public float[]? EdgeColour { get; set; }
+
     /// <summary>Colour multiplier as [r, g, b]; omit for none.</summary>
     [JsonProperty("tint")] public float[]? Tint { get; set; }
 
@@ -114,6 +120,10 @@ public sealed class ManifestScreen
             Contrast = Contrast,
             Saturation = Saturation,
             EdgeSoftness = EdgeSoftness,
+            Thickness = Thickness,
+            EdgeColour = EdgeColour is { Length: >= 3 } ec
+                ? new Vector3(ec[0], ec[1], ec[2])
+                : new Vector3(0.10f, 0.10f, 0.11f),
             Tint = Tint is { Length: >= 3 } t ? new Vector3(t[0], t[1], t[2]) : Vector3.One,
             Fit = Fitting?.ToLowerInvariant() switch
             {
@@ -146,6 +156,8 @@ public sealed class ManifestScreen
         Contrast = s.Contrast,
         Saturation = s.Saturation,
         EdgeSoftness = s.EdgeSoftness,
+        Thickness = s.Thickness,
+        EdgeColour = new[] { s.EdgeColour.X, s.EdgeColour.Y, s.EdgeColour.Z },
         Tint = s.Tint == Vector3.One ? null : new[] { s.Tint.X, s.Tint.Y, s.Tint.Z },
         Fitting = s.Fit.ToString().ToLowerInvariant(),
         Dwell = s.DwellSeconds,

@@ -413,25 +413,58 @@ public sealed class PlacementWindow : Window
         // showing them live would invite the user to set a value that does nothing.
         if (s.FitToImage)
         {
-            ImGui.TextDisabled($"Height {plugin.HeightOf(s):0.00} m — from the image");
+            ImGui.TextDisabled(
+                $"Height {plugin.HeightOf(s):0.00} m — from the image  ({s.DescribeAspect(plugin.AspectOf(s))})");
         }
         else
         {
             var h = s.Height;
             if (ImGui.DragFloat("Height", ref h, 0.02f, 0.2f, 30f)) { s.Height = h; dirty = true; }
 
-            if (ImGui.Button("16:9")) { s.Height = s.Width * 9f / 16f; dirty = true; }
-            ImGui.SameLine();
-            if (ImGui.Button("4:3")) { s.Height = s.Width * 3f / 4f; dirty = true; }
-            ImGui.SameLine();
-            if (ImGui.Button("1:1")) { s.Height = s.Width; dirty = true; }
+            // ⭐ Named shapes rather than three buttons, so the person running a board can
+            // tell contributors "it is 9:16, crop to fit" and be understood.
+            ImGui.SetNextItemWidth(180f);
+            if (ImGui.BeginCombo("Shape", s.DescribeAspect(plugin.AspectOf(s))))
+            {
+                foreach (var (shapeName, pw, ph) in ScreenPlacement.AspectPresets)
+                {
+                    if (!ImGui.Selectable(shapeName)) continue;
+                    s.Height = s.Width * ph / pw;
+                    dirty = true;
+                }
+                ImGui.EndCombo();
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "Sets the height from the width. The label is what to tell anyone " +
+                    "sending you a picture for this board.");
         }
 
         // ⭐ Only relevant when the panel is not taking the picture's shape — with fitting
         // on, the two always match and the control would do nothing.
         if (!s.FitToImage)
         {
-            var fitting = (int)s.Fit;
+            var thickness = s.Thickness;
+        if (ImGui.SliderFloat("Depth", ref thickness, 0f, 0.30f, "%.3f m"))
+        {
+            s.Thickness = thickness;
+            dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "How far the panel stands out from the wall. 0 is a flat picture.\n\n" +
+                "A few centimetres turns it into a mounted plaque, so holding it off the " +
+                "wall to clear the scenery looks deliberate instead of like it is floating.");
+
+        if (s.Thickness > 0.0005f)
+        {
+            var edgeColour = s.EdgeColour;
+            if (ImGui.ColorEdit3("Edge colour", ref edgeColour)) { s.EdgeColour = edgeColour; dirty = true; }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("The sides. Dark reads as a frame; try a wood tone for a board.");
+        }
+
+        var fitting = (int)s.Fit;
             ImGui.SetNextItemWidth(160f);
             if (ImGui.Combo("Picture", ref fitting, "Stretch to fit Fill and crop Letterbox "))
             {
