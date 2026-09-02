@@ -157,6 +157,10 @@ internal static unsafe class UiRects
     private static bool IsActionBar(string name)
         => name.StartsWith("_ActionBar", StringComparison.Ordinal);
 
+    private static bool IsTargetInfo(string name)
+        => name.StartsWith("_TargetInfo", StringComparison.Ordinal)
+        || name == "_FocusTargetInfo";
+
     /// <summary>
     /// Rectangles for the individual buttons of one action bar, with touching buttons
     /// merged into a run.
@@ -214,6 +218,62 @@ internal static unsafe class UiRects
         return count;
     }
 
+    /// <summary>
+    /// Write every visible interface element — name, position, size, whether we would cover
+    /// it, and how many rectangles it produced — to a file.
+    ///
+    /// ⭐⭐ Built after four blind attempts at chat. A name that matches nothing and an
+    /// element that produces no rectangle look identical from in game: both are "the
+    /// culling did not happen". Only the actual list distinguishes them.
+    /// See the memory note: probes write to a file, not through a person.
+    /// </summary>
+    public static string Dump(float viewportW, float viewportH)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"===== {DateTime.Now:yyyy-MM-dd HH:mm:ss}  viewport {viewportW}x{viewportH} =====");
+
+        try
+        {
+            var stage = AtkStage.Instance();
+            if (stage == null || stage->RaptureAtkUnitManager == null)
+                return sb.AppendLine("AtkStage or RaptureAtkUnitManager is null.").ToString();
+
+            var units = &stage->RaptureAtkUnitManager->AtkUnitManager.AllLoadedUnitsList;
+            Span<Vector4> scratch = stackalloc Vector4[Max];
+
+            for (var i = 0; i < units->Count; i++)
+            {
+                var unit = units->Entries[i].Value;
+                if (unit == null || unit->RootNode == null) continue;
+                if (!unit->IsVisible) continue;
+
+                var name = unit->NameString ?? "(null)";
+                var listed = IsActionBar(name)
+                             || name.StartsWith(GaugePrefix, StringComparison.Ordinal)
+                             || Array.IndexOf(Hud, name) >= 0;
+                var isWindow = unit->WindowNode != null;
+
+                var produced = 0;
+                if (IsActionBar(name)) produced = CollectActionBarButtons(unit, scratch);
+                else if (listed || isWindow) produced = CollectPaintedNodes(unit, scratch);
+
+                sb.AppendLine(
+                    $"{name,-28} vis={unit->IsVisible,-5} alpha={unit->Alpha,-4} scale={unit->Scale:0.00} " +
+                    $"pos=({unit->X},{unit->Y}) root={unit->RootNode->Width}x{unit->RootNode->Height} " +
+                    $"window={(isWindow ? "y" : "n")} listed={(listed ? "y" : "n")} rects={produced}");
+
+                for (var r = 0; r < produced && r < 4; r++)
+                    sb.AppendLine($"      rect {scratch[r].X:0},{scratch[r].Y:0} .. {scratch[r].Z:0},{scratch[r].W:0}");
+            }
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine("Dump failed: " + ex);
+        }
+
+        return sb.ToString();
+    }
+
     public static int Collect(Span<Vector4> into, float viewportW, float viewportH)
     {
         var count = 0;
@@ -255,18 +315,37 @@ internal static unsafe class UiRects
                     continue;
                 }
 
-                if (!isWindow)
+                // ⚠⚠ Painted-node measurement for target info ONLY.
+                //
+                // Its box is sized for the longest possible target name, so a whole-addon
+                // rectangle cut a band across the screen. But applying the same measurement
+                // to every element broke chat, because chat's content sits inside
+                // components and the walk found nothing — and "no rectangle" is
+                // indistinguishable in game from "not culled". Whole-addon rectangles were
+                // working for everything else; only this one needed changing.
+                if (IsTargetInfo(name))
                 {
                     count += CollectPaintedNodes(unit, into[count..]);
                     continue;
                 }
 
-                // A window keeps its frame rectangle. The frame genuinely is the region it
-                // occupies, and unlike a HUD element there is no reserved empty space in it.
-                float left = unit->X, top = unit->Y;
-                var frame = &unit->WindowNode->AtkResNode;
-                var w = frame->Width * unit->Scale;
-                var h = frame->Height * unit->Scale;
+                float left = unit->X, top = unit->Y, w, h;
+
+                if (isWindow)
+                {
+                    // A window's frame genuinely is the region it occupies.
+                    var frame = &unit->WindowNode->AtkResNode;
+                    w = frame->Width * unit->Scale;
+                    h = frame->Height * unit->Scale;
+                }
+                else
+                {
+                    // ⭐ Whole-addon rectangle. Slightly generous for elements with empty
+                    // space in them, and correct for everything on the list — chat, party
+                    // list, gauge, minimap, the bottom menu are all as dense as their box.
+                    w = unit->RootNode->Width * unit->Scale;
+                    h = unit->RootNode->Height * unit->Scale;
+                }
 
                 if (w <= 0f || h <= 0f) continue;
 

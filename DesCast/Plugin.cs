@@ -191,6 +191,24 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     private void OnCommand(string command, string args)
     {
+        if (args.Trim().Equals("ui", StringComparison.OrdinalIgnoreCase))
+        {
+            var size = ImGui.GetMainViewport().Size;
+            var text = UiRects.Dump(size.X, size.Y);
+            var path = System.IO.Path.Combine(PluginInterface.ConfigDirectory.FullName, "ui.log");
+            try
+            {
+                if (!PluginInterface.ConfigDirectory.Exists) PluginInterface.ConfigDirectory.Create();
+                System.IO.File.AppendAllText(path, text + Environment.NewLine);
+                Chat.Print($"DesCast: interface dumped to {path}");
+            }
+            catch (Exception ex)
+            {
+                Chat.Print($"DesCast: could not write the dump: {ex.Message}");
+            }
+            return;
+        }
+
         placementWindow.Toggle();
     }
 
