@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
 
 	<!-- ⚠ PROVISIONAL NAME. Nothing is published yet, so renaming is free right now and
@@ -8,7 +8,7 @@
 	<PropertyGroup>
 		<Product>DesCast</Product>
 		<AssemblyName>DesCast</AssemblyName>
-		<Version>0.3.1</Version>
+		<Version>0.4.0</Version>
 		<Authors>deserokk</Authors>
 		<Description>World-space screens for FFXIV housing.</Description>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -30,6 +30,15 @@
 	<ItemGroup>
 		<PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
 		<PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" />
+	</ItemGroup>
+
+	<!-- GDI+, for decoding animated GIFs and (later) rasterising text. Windows-only,
+	     which is not a constraint here. ⭐ The alternative was hand-writing a GIF
+	     decoder — LZW plus the frame-disposal rules — and this is exactly the wheel
+	     not worth reinventing; XIV Media Player rasterises its titles through the same
+	     library inside the same process, so it is proven here rather than assumed. -->
+	<ItemGroup>
+		<PackageReference Include="System.Drawing.Common" Version="9.0.0" />
 	</ItemGroup>
 
 	<!-- The generated doc XML exists to make the compiler police misplaced /// blocks; it has

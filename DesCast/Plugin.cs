@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -80,11 +80,21 @@ public sealed class Plugin : IDalamudPlugin
     private sealed class ContentEntry
     {
         public IDalamudTextureWrap? Wrap;
+
+        /// <summary>Set instead of <see cref="Wrap"/> when the source turned out to move.</summary>
+        public AnimatedImage? Animation;
+
         public string? Error;
         public bool Loading;
 
         /// <summary>Width ÷ height, or 0 while unknown.</summary>
         public float Aspect;
+
+        /// <summary>Video memory this entry holds, for the room's running total.</summary>
+        public long Bytes;
+
+        /// <summary>What a GIF gave up to fit its budget, so the editor can say so.</summary>
+        public string? Note;
     }
 
     private readonly Dictionary<string, ContentEntry> content = new();
@@ -114,6 +124,62 @@ public sealed class Plugin : IDalamudPlugin
             return errors;
         }
     }
+
+    /// <summary>
+    /// Notes about loaded content — currently only what a GIF gave up to fit its budget.
+    /// Keyed the same way as <see cref="ContentErrors"/>.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string> ContentNotes
+    {
+        get
+        {
+            var notes = new Dictionary<string, string>();
+            foreach (var (path, entry) in content)
+                if (entry.Note is { } n) notes[path] = n;
+            return notes;
+        }
+    }
+
+    /// <summary>
+    /// What everything currently loaded is costing in video memory, and how much of it
+    /// moves.
+    ///
+    /// ⭐⭐ This exists because the person who fills a room with screens is never the
+    /// person who finds out it was too many — they have already loaded it all and the
+    /// frame rate they see is the one their machine can afford. Guests arrive later, on
+    /// worse hardware, with no idea why the room is a slideshow. Putting a number in front
+    /// of the owner is the only point at which anyone can act on it.
+    ///
+    /// ⚠ An honest lower bound, not a true figure. It counts our own decoded pictures
+    /// and nothing else — not the game's, not other plugins'.
+    /// </summary>
+    internal (long Bytes, int Images, int Animations) ContentMemory
+    {
+        get
+        {
+            long bytes = 0;
+            var images = 0;
+            var animations = 0;
+
+            foreach (var entry in content.Values)
+            {
+                if (entry.Bytes <= 0) continue;
+
+                bytes += entry.Bytes;
+                if (entry.Animation != null) animations++;
+                else images++;
+            }
+
+            return (bytes, images, animations);
+        }
+    }
+
+    /// <summary>
+    /// Where the editor starts warning about the running total. Not a limit and nothing is
+    /// refused at it — it is the point past which "this room is heavy" is worth saying out
+    /// loud to the one person who can do something about it.
+    /// </summary>
+    internal const long MemoryWarnBytes = 256L * 1024 * 1024;
 
     /// <summary>
     /// ⚠ Windows' "Copy as path" (shift-right-click) wraps the path in double quotes, and
@@ -365,7 +431,12 @@ public sealed class Plugin : IDalamudPlugin
                 System.Runtime.InteropServices.CollectionsMarshal.AsSpan(drawList),
                 Config.ReverseDepth,
                 Config.DisableOcclusion,
-                Config.AvoidGameUi))
+
+                // ⭐⭐ Nothing to keep off when there is no interface on screen. Hiding the
+                // UI is precisely what someone does to look at a screen properly — so
+                // holes punched for a hotbar that is no longer drawn are at their most
+                // visible exactly when the picture matters most. Bunny, 2026-09-02.
+                Config.AvoidGameUi && !GameGui.GameUiHidden))
             return;
 
         var output = Renderer.OutputHandle;
@@ -461,6 +532,15 @@ public sealed class Plugin : IDalamudPlugin
 
         if (content.TryGetValue(path, out var entry))
         {
+            // ⭐ A GIF resolves to whichever frame the wall clock says, and the renderer
+            // never learns that anything moved — it is handed a texture and a placement,
+            // the same as a poster. That is what keeps playback out of the shader.
+            if (entry.Animation is { Frames.Length: > 0 } anim)
+            {
+                aspect = entry.Aspect;
+                return anim.HandleAt(DateTimeOffset.UtcNow);
+            }
+
             // Still decoding, or failed — either way show the test card, and the editor
             // reports which of the two it is.
             if (entry.Wrap is not { } w) return testCardHandle;
@@ -485,25 +565,76 @@ public sealed class Plugin : IDalamudPlugin
         {
             try
             {
-                IDalamudTextureWrap wrap;
+                byte[] bytes;
 
                 if (IsWebUrl(path))
                 {
-                    var bytes = await FetchImageAsync(path).ConfigureAwait(false);
-                    wrap = await Textures.CreateFromImageAsync(bytes).ConfigureAwait(false);
+                    bytes = await FetchImageAsync(path).ConfigureAwait(false);
                 }
                 else
                 {
                     if (!System.IO.File.Exists(path))
                         throw new System.IO.FileNotFoundException("No file at that path.");
 
-                    await using var stream = System.IO.File.OpenRead(path);
-                    wrap = await Textures.CreateFromImageAsync(stream).ConfigureAwait(false);
+                    // ⚠ Same ceiling as a download. The bytes have to be in hand to tell a
+                    // moving GIF from a still one, so a local file is no longer streamed
+                    // straight into the decoder and its size has to be checked here too.
+                    var size = new System.IO.FileInfo(path).Length;
+                    if (size > MaxImageBytes)
+                        throw new InvalidOperationException(
+                            $"That file is {size / (1024 * 1024)} MB; the limit is {MaxImageBytes / (1024 * 1024)} MB.");
+
+                    bytes = await System.IO.File.ReadAllBytesAsync(path).ConfigureAwait(false);
                 }
 
-                entry.Aspect = wrap.Height > 0 ? (float)wrap.Width / wrap.Height : 0f;
-                entry.Wrap = wrap;   // assigned last: Aspect must be readable the instant
-                entry.Loading = false; // the draw thread sees a non-null Wrap
+                // ⭐ A GIF that turns out to hold one frame is just a picture, and Decode
+                // says so by returning null — so the ordinary path still handles it and
+                // nothing special-cases the extension.
+                var maxEdge = Config.MaxImageEdge;
+
+                var animation = AnimatedImage.IsGif(bytes)
+                    ? AnimatedImage.Decode(bytes, System.IO.Path.GetFileName(path),
+                                           AnimatedImage.DefaultBudgetBytes, maxEdge)
+                    : null;
+
+                if (animation != null)
+                {
+                    entry.Aspect = animation.Aspect;
+                    entry.Bytes = animation.Bytes;
+                    entry.Note = animation.Compromise;
+                    entry.Animation = animation;  // assigned last, as below
+                    entry.Loading = false;
+                }
+                else
+                {
+                    // ⭐⭐ Shrink oversized pictures before they reach the GPU. This is the
+                    // single biggest thing anyone can do about a heavy room — five phone
+                    // photographs at full resolution cost 120 MB, and the same five capped
+                    // to 2048 cost about a quarter of that with nothing visibly given up.
+                    //
+                    // ⚠ Returns null when the picture is already small enough, and also when
+                    // GDI+ cannot read the format at all. Both mean the same thing here:
+                    // hand it to Dalamud's decoder, which is the broader of the two.
+                    var scaled = ImageDecode.TryDownscale(
+                        bytes, maxEdge, out var sw, out var sh, out var ow, out var oh);
+
+                    IDalamudTextureWrap wrap;
+                    if (scaled != null)
+                    {
+                        wrap = ImageDecode.Upload(scaled, sw, sh, $"DesCast {System.IO.Path.GetFileName(path)}");
+                        entry.Note = $"Scaled from {ow}×{oh} to {sw}×{sh} — "
+                                   + $"{(long)ow * oh * 4 / (1024 * 1024)} MB down to {(long)sw * sh * 4 / (1024 * 1024)} MB.";
+                    }
+                    else
+                    {
+                        wrap = await Textures.CreateFromImageAsync(bytes).ConfigureAwait(false);
+                    }
+
+                    entry.Aspect = wrap.Height > 0 ? (float)wrap.Width / wrap.Height : 0f;
+                    entry.Bytes = (long)wrap.Width * wrap.Height * 4;
+                    entry.Wrap = wrap;   // assigned last: Aspect must be readable the instant
+                    entry.Loading = false; // the draw thread sees a non-null Wrap
+                }
 
             }
             catch (Exception ex)
@@ -757,7 +888,26 @@ public sealed class Plugin : IDalamudPlugin
     internal void ForgetContent(string rawPath)
     {
         var path = NormalisePath(rawPath);
-        if (content.Remove(path, out var entry)) entry.Wrap?.Dispose();
+        if (!content.Remove(path, out var entry)) return;
+
+        entry.Wrap?.Dispose();
+        entry.Animation?.Dispose();
+    }
+
+    /// <summary>
+    /// Drop every cached picture. For the detail setting — changing it has no effect on
+    /// anything already decoded, and a setting that only applies to pictures you have not
+    /// looked at yet is worse than no setting.
+    /// </summary>
+    internal void ForgetAllContent()
+    {
+        foreach (var e in content.Values)
+        {
+            e.Wrap?.Dispose();
+            e.Animation?.Dispose();
+        }
+
+        content.Clear();
     }
 
     /// <summary>
@@ -805,7 +955,11 @@ public sealed class Plugin : IDalamudPlugin
         Commands.RemoveHandler(CommandName);
         windows.RemoveAllWindows();
 
-        foreach (var e in content.Values) e.Wrap?.Dispose();
+        foreach (var e in content.Values)
+        {
+            e.Wrap?.Dispose();
+            e.Animation?.Dispose();
+        }
         content.Clear();
         testCard?.Dispose();
 

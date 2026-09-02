@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Vortice.D3DCompiler;
@@ -34,6 +34,10 @@ public sealed class ScreenRenderer : IDisposable
     private ID3D11BlendState? blend;
     private ID3D11RasterizerState? raster;
     private ID3D11DepthStencilState? noDepth;
+
+    // Draw order, reused between frames so sorting a roomful of screens allocates nothing.
+    private int[] order = Array.Empty<int>();
+    private float[] orderKeys = Array.Empty<float>();
 
     private ID3D11Texture2D? target;
     private ID3D11RenderTargetView? targetRtv;
@@ -539,9 +543,34 @@ float4 PSMain(VSOut i) : SV_Target
             ctx.PSSetConstantBuffer(0, cb);
             ctx.PSSetShaderResource(1, game.DepthSrv);
 
-            var drew = false;
-            foreach (var panel in screens)
+            // ⚠⚠ Panels are tested against the *scene* per pixel, but the pipeline's own
+            // depth test is off, so two panels overlapping each other resolve purely by the
+            // order they were drawn in — the last screen in the list wins every overlap,
+            // however far away it is. Sort back to front so distance decides instead of
+            // list position.
+            //
+            // Painter's algorithm on the panel centres. That is exact for separated
+            // objects, which is what screens on walls are; two panels that physically
+            // interpenetrate would still resolve per-panel rather than per-pixel, and the
+            // fix for that is a real depth buffer, not a cleverer sort key.
+            if (order.Length < screens.Length)
             {
+                order = new int[screens.Length];
+                orderKeys = new float[screens.Length];
+            }
+
+            for (var i = 0; i < screens.Length; i++)
+            {
+                order[i] = i;
+                orderKeys[i] = Vector3.DistanceSquared(screens[i].Center, cam.Position);
+            }
+
+            Array.Sort(orderKeys, order, 0, screens.Length);
+
+            var drew = false;
+            for (var oi = screens.Length - 1; oi >= 0; oi--)   // far → near
+            {
+                var panel = screens[order[oi]];
                 if (panel.ContentSrv == 0) continue;
 
                 var p = new Params

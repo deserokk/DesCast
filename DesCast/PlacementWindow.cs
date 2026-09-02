@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -54,6 +54,36 @@ public sealed class PlacementWindow : Window
         if (plugin.Renderer.Error is { } rerr)
             ErrorText(rerr);
 
+        // ⭐⭐ The running memory total, and the one place it can usefully appear. Whoever
+        // decorates the room never experiences the cost of overdoing it — they loaded it
+        // all gradually on the machine that could afford it. The guest who walks in later
+        // does, and has no idea why. This is the only moment at which the person who can
+        // act on the number is the person looking at it.
+        var mem = plugin.ContentMemory;
+        if (mem.Bytes > 0)
+        {
+            var mb = mem.Bytes / (1024.0 * 1024.0);
+            var what = mem.Animations > 0
+                ? $"{mem.Images} image(s) and {mem.Animations} GIF(s)"
+                : $"{mem.Images} image(s)";
+
+            if (mem.Bytes >= Plugin.MemoryWarnBytes)
+            {
+                ImGui.TextColored(new Vector4(1f, 0.75f, 0.35f, 1f),
+                    $"Loaded content: {mb:N0} MB — {what}. That is a lot to ask of a guest.");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(
+                        "Every screen in view holds its picture in video memory, and a GIF\n" +
+                        "holds every frame of it at once. Nothing here is broken — but a\n" +
+                        "visitor on weaker hardware pays this before they see the room.\n\n" +
+                        "Fewer GIFs, or shorter ones, is the cheapest thing to give up.");
+            }
+            else
+            {
+                ImGui.TextDisabled($"Loaded content: {mb:N0} MB — {what}");
+            }
+        }
+
         ImGui.Separator();
 
         var enabled = cfg.Enabled;
@@ -66,6 +96,40 @@ public sealed class PlacementWindow : Window
                 "If screens show through walls, or never appear at all, flip this.\n" +
                 "It selects which way round the game measures distance, and there are\n" +
                 "only two possible answers.");
+
+        // ⭐ Picture detail, expressed as what it costs rather than as a number of pixels.
+        // "2048" means nothing to anyone; "about 9 MB a picture" is the decision actually
+        // being made, and it is the only setting here that moves the total above.
+        var edges = new[] { 0, 4096, 2048, 1536, 1024 };
+        var edgeLabels = new[]
+        {
+            "Original size (whatever the file is)",
+            "Very high — 4096px, about 35 MB a picture",
+            "High — 2048px, about 9 MB a picture",
+            "Medium — 1536px, about 5 MB a picture",
+            "Low — 1024px, about 2 MB a picture",
+        };
+
+        var edgeIndex = Array.IndexOf(edges, cfg.MaxImageEdge);
+        if (edgeIndex < 0) edgeIndex = 2;
+
+        ImGui.SetNextItemWidth(360f);
+        if (ImGui.Combo("Picture detail", ref edgeIndex, edgeLabels, edgeLabels.Length))
+        {
+            cfg.MaxImageEdge = edges[edgeIndex];
+            cfg.Save();
+            plugin.ForgetAllContent();
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "How much of a picture is kept once it reaches the graphics card.\n\n" +
+                "⚠ The file format makes no difference to this. A JPEG and a PNG of the\n" +
+                "same photograph cost exactly the same once decoded — compression is\n" +
+                "undone before the card ever sees it. Size is the only lever.\n\n" +
+                "A screen on a wall covers perhaps a thousand pixels of your monitor, so\n" +
+                "a six-megapixel photo is carrying detail that cannot reach anyone's eye.\n" +
+                "High is already generous. Changing this reloads every picture.");
 
         var avoidUi = cfg.AvoidGameUi;
         if (ImGui.Checkbox("Keep off the game interface", ref avoidUi)) { cfg.AvoidGameUi = avoidUi; cfg.Save(); }
@@ -580,6 +644,16 @@ public sealed class PlacementWindow : Window
             // from success.
             if (plugin.ContentErrors.TryGetValue(s.Sources[i], out var err))
                 ErrorText(err, 12f);
+
+            // A GIF that had to be shrunk or thinned still works, so nothing above will
+            // mention it — but "why does this look softer than it does in Discord" has
+            // exactly one answer and it should be here rather than guessed at.
+            if (plugin.ContentNotes.TryGetValue(s.Sources[i], out var note))
+            {
+                ImGui.Indent(12f);
+                ImGui.TextColored(new Vector4(0.75f, 0.75f, 0.8f, 1f), note);
+                ImGui.Unindent(12f);
+            }
 
             // An album is one line that stands for many pictures; say how many, or the
             // rotation length is a mystery.

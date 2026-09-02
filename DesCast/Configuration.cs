@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Dalamud.Configuration;
 using Dalamud.Plugin;
@@ -121,6 +121,19 @@ public class Configuration : IPluginConfiguration
     public bool AvoidGameUi { get; set; } = true;
 
     /// <summary>Show the placement editor on load. Off by default once things settle.</summary>
+    /// <summary>
+    /// Longest edge a picture is kept at, in pixels. 0 keeps whatever arrives.
+    ///
+    /// ⚠⚠ This, and nothing else, is what a room costs in video memory. The file format
+    /// is irrelevant — a JPEG and a PNG of the same photograph decode to exactly the same
+    /// width × height × 4 bytes, because compression is undone before the GPU sees it.
+    ///
+    /// ⭐ A phone photograph arrives at six megapixels and charges 24 MB for detail no wall
+    /// panel can display. Capping the long edge is a straight division with nothing visible
+    /// given up, which is why the default is not "off".
+    /// </summary>
+    public int MaxImageEdge { get; set; } = ImageDecode.DefaultMaxEdge;
+
     public bool OpenOnLoad { get; set; } = true;
 
     [NonSerialized] private IDalamudPluginInterface? pluginInterface;

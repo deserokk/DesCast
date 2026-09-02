@@ -4,6 +4,62 @@ All of this shipped on 2026-09-01, in one evening, with Bunny and Q testing live
 reasons matter more than the version numbers — most of these are bugs that only appear
 when a second person uses the thing.
 
+## 0.4.0
+
+**Animated GIFs.** Frames are decoded once and held as textures, and which one shows is
+derived from the wall clock exactly like the slideshow — so everyone standing in the room
+is on the same frame of the same GIF, with no messages and nobody in charge. A reaction
+gif lands together.
+
+GDI+ composites the frames, so none of the format's awkward parts (partial frames stacked
+on each other, three different disposal rules) are ours to get wrong. Delays of 0 or 10ms
+are treated as 100ms, which is what every browser does and what a large share of real GIFs
+depend on.
+
+**Pictures are capped at 2048 pixels on the long edge.** Five photographs in a room came to
+120 MB, because a modern phone photo is six megapixels and costs 24 MB decoded no matter
+what it weighs on disk.
+
+⚠⚠ The file format is not the lever here, and it is worth being clear about why: a JPEG
+and a PNG of the same photograph cost **exactly the same** on the graphics card, because
+compression is undone before the card sees the pixels. JPEG saves download time and zero
+video memory.
+
+⭐ Resolution is the whole story, and there is enormous slack in it — a screen on a wall
+covers maybe a thousand pixels of a monitor, so a six-megapixel photo is carrying several
+times more detail than can reach anyone's eye. The cap takes those five pictures from
+120 MB to roughly 30 with nothing visibly given up. Adjustable under "Picture detail",
+including off.
+
+**A memory budget, and a number the room's owner can see.** A GIF holds every frame at
+once, so one long one costs more than a wall of posters. Each is capped at 48 MB — shrunk
+first, frames dropped only if shrinking is not enough, and the editor says which happened.
+Dropped frames never change the duration, so the clock stays honest.
+
+The editor also shows the running total for everything loaded, and warns past 256 MB.
+⭐ Nothing is refused: the point is that whoever decorates a room never experiences the
+cost of overdoing it. They loaded it gradually, on the machine that could afford it. The
+guest who walks in later pays it all at once and has no idea why.
+
+**No interface holes when the interface is hidden.** Hiding the UI is exactly what someone
+does to look at a screen properly, so rectangles bitten out for a hotbar that is no longer
+drawn were at their most visible precisely when the picture mattered most. (Bunny.)
+
+**The party list is measured, not reserved.** Its box holds eight members whether or not
+eight are in the party, so two people in a house produced a tall column cut out of a
+screen. It now uses the painted-node measurement that target info uses, for the same
+reason.
+
+⚠ This was correct in 0.1.16 and regressed in 0.1.19, when painted-node measurement was
+pulled back to target info only. That revert was right about chat — and one element too
+broad: chat's actual bug was the component-subtree walk, fixed separately in 0.1.18.
+(Spotted by Chris, who remembered it working.)
+
+**Screens no longer occlude each other backwards.** Panels were tested against the scene
+per pixel but never against each other, so overlapping screens resolved by list order — a
+distant picture would sit on top of a near one purely because it was added later. They now
+draw back to front. (Reported by Bunny.)
+
 ## 0.1.17
 
 **Restored the action bar walker deleted in 0.1.16.** Hotbar buttons are component nodes,

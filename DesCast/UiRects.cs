@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
@@ -162,6 +162,20 @@ internal static unsafe class UiRects
         || name == "_FocusTargetInfo";
 
     /// <summary>
+    /// ⚠⚠ The party list reserves room for eight members whether or not eight are in the
+    /// party, so its whole-addon rectangle cuts a tall column out of a screen when two
+    /// people are stood in a house — which is the normal case here, not the rare one.
+    ///
+    /// This was measured correctly in 0.1.16, when painted-node measurement applied to
+    /// every named element, and regressed in 0.1.19 when that was reverted to target info
+    /// only. The revert was right about chat and too broad by one element: chat's real bug
+    /// was the component-subtree walk, fixed separately in 0.1.18. Reported by Chris,
+    /// 2026-09-02.
+    /// </summary>
+    private static bool IsPartyList(string name)
+        => name == "_PartyList";
+
+    /// <summary>
     /// Rectangles for the individual buttons of one action bar, with touching buttons
     /// merged into a run.
     ///
@@ -323,7 +337,7 @@ internal static unsafe class UiRects
                 // components and the walk found nothing — and "no rectangle" is
                 // indistinguishable in game from "not culled". Whole-addon rectangles were
                 // working for everything else; only this one needed changing.
-                if (IsTargetInfo(name))
+                if (IsTargetInfo(name) || IsPartyList(name))
                 {
                     count += CollectPaintedNodes(unit, into[count..]);
                     continue;
@@ -341,8 +355,15 @@ internal static unsafe class UiRects
                 else
                 {
                     // ⭐ Whole-addon rectangle. Slightly generous for elements with empty
-                    // space in them, and correct for everything on the list — chat, party
-                    // list, gauge, minimap, the bottom menu are all as dense as their box.
+                    // space in them, and correct for what is left on this path — chat,
+                    // gauge, minimap and the bottom menu are all as dense as their box.
+                    //
+                    // ⚠ The two that are not — target info, sized for the longest possible
+                    // name, and the party list, sized for eight members — are handled
+                    // above. Both were found the same way: a bite far taller or wider than
+                    // anything on screen. That is the symptom to look for when adding an
+                    // element here, and the reason to check it with a party of two rather
+                    // than a full one.
                     w = unit->RootNode->Width * unit->Scale;
                     h = unit->RootNode->Height * unit->Scale;
                 }
