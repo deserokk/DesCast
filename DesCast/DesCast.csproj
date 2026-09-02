@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+
+	<!-- ⚠ PROVISIONAL NAME. Nothing is published yet, so renaming is free right now and
+	     expensive the moment an id ships (see the CastWatch→DeserokUtils note in
+	     ORIENTATION.md). Rename before the first push to DalamudPlugins, not after. -->
+
+	<PropertyGroup>
+		<Product>DesCast</Product>
+		<AssemblyName>DesCast</AssemblyName>
+		<Version>0.1.0</Version>
+		<Authors>deserokk</Authors>
+		<Description>World-space screens for FFXIV housing.</Description>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<Nullable>enable</Nullable>
+
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<DocumentationFile>obj\$(Configuration)\$(AssemblyName).xml</DocumentationFile>
+		<NoWarn>$(NoWarn);CS1591</NoWarn>
+	</PropertyGroup>
+
+	<!-- ⭐ Vortice is a thin binding over D3D11, not a utility library, so the usual
+	     "reflect over ClientStructs instead of taking a dependency" preference does not
+	     apply — the alternative is hand-writing several hundred lines of COM interop.
+	     Dalamud does not ship a D3D binding of its own; verified against the installed
+	     addon/Hooks/dev folder, which carries none.
+
+	     ⚠ Versions pinned. This talks to the game's own D3D11 device; a surprise major
+	     bump is not something we want arriving silently from a floating range. -->
+	<ItemGroup>
+		<PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
+		<PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" />
+	</ItemGroup>
+
+	<!-- The generated doc XML exists to make the compiler police misplaced /// blocks; it has
+	     no runtime consumer, so keep it out of the shipped zip. Same reasoning as DeserokUtils. -->
+	<Target Name="DropDocXmlBeforePackaging" AfterTargets="Build" BeforeTargets="DefaultDalamudPackagerRelease">
+		<Delete Files="$(OutputPath)$(AssemblyName).xml" />
+	</Target>
+
+</Project>
