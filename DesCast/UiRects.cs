@@ -45,7 +45,11 @@ internal static unsafe class UiRects
     /// </summary>
     private static readonly string[] Hud =
     {
-        "_ChatLog",         // chat
+        // ⚠ "ChatLog", with no underscore — unlike almost every other HUD element. Guessed
+        // it as "_ChatLog" and the match silently never fired, so chat stayed covered while
+        // everything else worked. Every other name here is verified against Pictomancy's.
+        "ChatLog",
+        "ChatLogPanel_0", "ChatLogPanel_1", "ChatLogPanel_2", "ChatLogPanel_3",
         "_PartyList",
         "_ActionBar", "_ActionBar01", "_ActionBar02", "_ActionBar03", "_ActionBar04",
         "_ActionBar05", "_ActionBar06", "_ActionBar07", "_ActionBar08", "_ActionBar09",

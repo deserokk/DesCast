@@ -8,7 +8,7 @@
 	<PropertyGroup>
 		<Product>DesCast</Product>
 		<AssemblyName>DesCast</AssemblyName>
-		<Version>0.1.13</Version>
+		<Version>0.1.14</Version>
 		<Authors>deserokk</Authors>
 		<Description>World-space screens for FFXIV housing.</Description>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
