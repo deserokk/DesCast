@@ -55,6 +55,18 @@ public class ScreenPlacement
     /// <summary>0 = invisible, 1 = solid. Multiplies the whole panel.</summary>
     public float Opacity { get; set; } = 1.0f;
 
+    /// <summary>
+    /// Scales the picture's colour. 1 leaves it alone, below 1 dims it, above 1 lifts it.
+    ///
+    /// ⭐⭐ Separate from <see cref="Opacity"/> on purpose, and they are not interchangeable.
+    /// Opacity blends the panel *into* the scene, so dimming with it makes the picture
+    /// translucent and washed out — you can see the wall through it. Brightness scales the
+    /// colour while the panel stays solid, which is what a bright photo hanging in a dim
+    /// room actually needs. ⭐ Asked for by Bunny and Q, who both reached for it
+    /// independently after finding opacity did the wrong thing.
+    /// </summary>
+    public float Brightness { get; set; } = 1.0f;
+
     // ── Which house this belongs to ───────────────────────────────────────────────
 
     /// <summary>

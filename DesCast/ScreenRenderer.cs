@@ -71,7 +71,7 @@ public sealed class ScreenRenderer : IDisposable
         public Vector4 AxisX;    // xyz = half-width vector
         public Vector4 AxisY;    // xyz = half-height vector
         public Vector4 Flags;    // x reverseZ, y disableOcclusion, z depthW, w depthH
-        public Vector4 Flags2;   // x = number of interface rectangles in use
+        public Vector4 Flags2;   // x = interface rectangle count, y = brightness
     }
 
     /// <summary>
@@ -175,6 +175,10 @@ float4 PSMain(VSOut i) : SV_Target
 
     float2 uv = float2(u * 0.5 + 0.5, 0.5 - v * 0.5);
     float4 c = Content.SampleLevel(LinearClamp, uv, 0);
+
+    // Colour only. Scaling alpha here as well would make dimming and fading the same
+    // control, which is exactly the confusion this setting exists to remove.
+    c.rgb *= Flags2.y;
     c.a *= Center.w;
     return c;
 }
@@ -348,6 +352,7 @@ float4 PSMain(VSOut i) : SV_Target
         Vector3 AxisX,
         Vector3 AxisY,
         float Opacity,
+        float Brightness,
         nint ContentSrv);
 
     /// <summary>
@@ -409,7 +414,7 @@ float4 PSMain(VSOut i) : SV_Target
                         disableOcclusion ? 1f : 0f,
                         game.RenderWidth > 0 ? game.RenderWidth : width,
                         game.RenderHeight > 0 ? game.RenderHeight : height),
-                    Flags2 = new Vector4(uiRectCount, 0f, 0f, 0f),
+                    Flags2 = new Vector4(uiRectCount, MathF.Max(panel.Brightness, 0f), 0f, 0f),
                 };
 
                 // ⭐ Only shade the pixels this panel can possibly cover. The pass is a

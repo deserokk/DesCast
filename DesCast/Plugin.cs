@@ -309,6 +309,7 @@ public sealed class Plugin : IDalamudPlugin
                 s.AxisX,
                 s.AxisYFor(imageAspect),
                 s.Opacity,
+                s.Brightness,
                 handle));
         }
         if (drawList.Count == 0) return;

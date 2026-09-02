@@ -373,8 +373,22 @@ public sealed class PlacementWindow : Window
             if (ImGui.Button("1:1")) { s.Height = s.Width; dirty = true; }
         }
 
+        var brightness = s.Brightness;
+        if (ImGui.SliderFloat("Brightness", ref brightness, 0.05f, 2f))
+        {
+            s.Brightness = brightness;
+            dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "Dims or lifts the picture while it stays solid. Use this for a bright " +
+                "photo in a dim room.\n\nNot the same as opacity: dimming with opacity " +
+                "makes the picture see-through instead of dark.");
+
         var opacity = s.Opacity;
         if (ImGui.SliderFloat("Opacity", ref opacity, 0f, 1f)) { s.Opacity = opacity; dirty = true; }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("How solid the panel is. Lower values let the room show through it.");
 
         ImGui.Spacing();
         ImGui.TextDisabled("Showing");

@@ -58,6 +58,9 @@ public sealed class ManifestScreen
 
     [JsonProperty("opacity")] public float Opacity { get; set; } = 1f;
 
+    /// <summary>Colour multiplier; 1 leaves the picture alone.</summary>
+    [JsonProperty("brightness")] public float Brightness { get; set; } = 1f;
+
     [JsonProperty("dwell")] public float Dwell { get; set; } = 15f;
 
     [JsonProperty("sources", ObjectCreationHandling = ObjectCreationHandling.Replace)]
@@ -83,6 +86,7 @@ public sealed class ManifestScreen
             Height = Height,
             FitToImage = Fit,
             Opacity = Opacity,
+            Brightness = Brightness,
             DwellSeconds = Dwell,
             Sources = Sources ?? new List<string>(),
             Enabled = true,
@@ -104,6 +108,7 @@ public sealed class ManifestScreen
         Height = s.Height,
         Fit = s.FitToImage,
         Opacity = s.Opacity,
+        Brightness = s.Brightness,
         Dwell = s.DwellSeconds,
         Sources = new List<string>(s.Sources),
     };
