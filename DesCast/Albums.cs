@@ -35,9 +35,6 @@ internal sealed class Albums
     }
 
     private readonly Dictionary<string, Entry> cache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Configuration config;
-
-    public Albums(Configuration config) => this.config = config;
 
     private static readonly Regex ImgurAlbum = new(
         @"^https?://(?:www\.|m\.)?imgur\.com/(?:a|gallery)/([A-Za-z0-9]+)",
@@ -115,28 +112,48 @@ internal sealed class Albums
     }
 
     /// <summary>
-    /// ⚠ Imgur's API needs a client id. Unlike a bot token this is semi-public and safe to
-    /// hand out — it identifies the application, not a user, and grants nothing but read
-    /// access to public content. It still has to be registered once, so it is a setting
-    /// rather than something shipped blank.
+    /// Imgur's album contents, without an API key.
+    ///
+    /// ⚠⚠ **Imgur has closed public API registration.** Their documented endpoint for it now
+    /// redirects to the homepage, and an account's Applications page lists only apps you have
+    /// authorised — there is no "create" anywhere. So the documented route is not available to
+    /// new users at all, and a client-id setting would have been a field nobody could fill.
+    ///
+    /// ⭐ The public embed page carries the album inline and needs nothing. Verified against a
+    /// real album 2026-09-01: five images, five hash/ext pairs, no spurious matches, and the
+    /// derived links serve real image bytes.
+    ///
+    /// ⚠ This is a page rather than a documented API, so it can change without notice. It fails
+    /// the way everything else here does — visibly, with the last good listing kept — rather than
+    /// by going blank, and a GitHub folder remains the stable alternative.
     /// </summary>
-    private async Task<IReadOnlyList<string>> ImgurAsync(string albumId)
+    private static async Task<IReadOnlyList<string>> ImgurAsync(string albumId)
     {
-        var clientId = (config.ImgurClientId ?? string.Empty).Trim();
-        if (clientId.Length == 0)
-            throw new InvalidOperationException(
-                "Imgur albums need a client id. There is a button for it in settings.");
-
-        var json = await Plugin.FetchTextAsync(
-            $"https://api.imgur.com/3/album/{albumId}/images",
-            ("Authorization", $"Client-ID {clientId}")).ConfigureAwait(false);
+        var html = await Plugin.FetchTextAsync(
+            $"https://imgur.com/a/{albumId}/embed?pub=true",
+            ("Accept", "text/html")).ConfigureAwait(false);
 
         var images = new List<string>();
-        foreach (var item in JObject.Parse(json)["data"] ?? new JArray())
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        // Each image appears as a hash with its extension a short way behind it. Bounded
+        // lookahead so a malformed page cannot make this scan the whole document per match.
+        foreach (Match m in Regex.Matches(
+                     html,
+                     @"""hash""\s*:\s*""([A-Za-z0-9]+)"".{0,300}?""ext""\s*:\s*""([^""]*)""",
+                     RegexOptions.Singleline))
         {
-            var link = item["link"]?.ToString();
-            if (!string.IsNullOrEmpty(link)) images.Add(link);
+            var hash = m.Groups[1].Value;
+            if (!seen.Add(hash)) continue;
+
+            // ⚠ Extensions come through as ".jpg?1" on edited images; anything past the
+            // question mark is a cache-buster and breaks the link if kept.
+            var ext = m.Groups[2].Value.Split('?')[0];
+            if (ext.Length == 0) ext = ".jpg";
+
+            images.Add($"https://i.imgur.com/{hash}{ext}");
         }
+
         return images;
     }
 

@@ -83,28 +83,6 @@ public sealed class PlacementWindow : Window
                 "If a screen appears with this on and vanishes with it off, the panel\n" +
                 "is in the right place and only the wall test is wrong.");
 
-        var imgurId = cfg.ImgurClientId;
-        ImGui.SetNextItemWidth(200f);
-        if (ImGui.InputText("Imgur client id", ref imgurId, 64))
-        {
-            cfg.ImgurClientId = imgurId.Trim();
-            cfg.Save();
-        }
-        ImGui.SameLine();
-        if (ImGui.Button("Get one"))
-            OpenLink("https://imgur.com/oauth2/addclient");
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Opens Imgur's registration page in your browser.");
-
-        ImGui.SameLine();
-        ImGui.TextDisabled("(?)");
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "Only needed to use Imgur albums. Register one free at " +
-                "imgur.com/oauth2/addclient (choose \"anonymous usage without a callback\").\n\n" +
-                "It is not a password: it identifies the app, not you, and only reads public " +
-                "content. Everyone can use the same one.");
-
         ImGui.Separator();
 
         // ── Shared rooms ──────────────────────────────────────────────────────────────

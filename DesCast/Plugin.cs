@@ -155,7 +155,7 @@ public sealed class Plugin : IDalamudPlugin
         Game = new GameView();
         Renderer = new ScreenRenderer(Game);
         Manifest = new ManifestService(Config);
-        Albums = new Albums(Config);
+        Albums = new Albums();
         Board = new CompanyBoard(Config);
 
         placementWindow = new PlacementWindow(this);
