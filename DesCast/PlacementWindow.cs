@@ -50,9 +50,9 @@ public sealed class PlacementWindow : Window
         }
 
         if (plugin.Game.Error is { } gerr)
-            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), gerr);
+            ErrorText(gerr);
         if (plugin.Renderer.Error is { } rerr)
-            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), rerr);
+            ErrorText(rerr);
 
         ImGui.Separator();
 
@@ -90,6 +90,14 @@ public sealed class PlacementWindow : Window
             cfg.ImgurClientId = imgurId.Trim();
             cfg.Save();
         }
+        ImGui.SameLine();
+        if (ImGui.Button("Get one"))
+            OpenLink("https://imgur.com/oauth2/addclient");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Opens Imgur's registration page in your browser.");
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(
                 "Only needed to use Imgur albums. Register one free at " +
@@ -157,7 +165,7 @@ public sealed class PlacementWindow : Window
             // ⚠ Fail visibly. An unreachable file means shared screens go blank, and a
             // blank wall is indistinguishable from an empty room.
             if (serr is not null)
-                ImGui.TextColored(new Vector4(1f, 0.5f, 0.45f, 1f), $"   {serr}");
+                ErrorText(serr, 12f);
 
             ImGui.PopID();
             i2++;
@@ -196,7 +204,7 @@ public sealed class PlacementWindow : Window
             if (inc++ == 0) ImGui.TextDisabled("Rooms listed by those files:");
             ImGui.TextDisabled($"   {Shorten(iurl)}  —  {icount} screen(s)");
             if (ierr is not null)
-                ImGui.TextColored(new Vector4(1f, 0.5f, 0.45f, 1f), $"      {ierr}");
+                ErrorText(ierr, 20f);
         }
 
         if (ImGui.CollapsingHeader("Build a company file"))
@@ -560,7 +568,7 @@ public sealed class PlacementWindow : Window
             // screen that is simply working. Say so, or a typo is indistinguishable
             // from success.
             if (plugin.ContentErrors.TryGetValue(s.Sources[i], out var err))
-                ImGui.TextColored(new Vector4(1f, 0.45f, 0.45f, 1f), $"   {err}");
+                ErrorText(err, 12f);
 
             // An album is one line that stands for many pictures; say how many, or the
             // rotation length is a mystery.
@@ -569,7 +577,7 @@ public sealed class PlacementWindow : Window
                 var n = plugin.Albums.CountFor(s.Sources[i]);
                 var albumErr = plugin.Albums.ErrorFor(s.Sources[i]);
                 if (albumErr is not null)
-                    ImGui.TextColored(new Vector4(1f, 0.45f, 0.45f, 1f), $"   {albumErr}");
+                    ErrorText(albumErr, 12f);
                 else
                     ImGui.TextDisabled(n == 0 ? "   album — reading..." : $"   album — {n} picture(s)");
             }
@@ -621,6 +629,37 @@ public sealed class PlacementWindow : Window
         }
 
         if (dirty) cfg.Save();
+    }
+
+    /// <summary>
+    /// Open a page in the user's browser. ⚠ UseShellExecute, or .NET tries to run the URL
+    /// as a program and nothing happens.
+    /// </summary>
+    private static void OpenLink(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning($"Could not open {url}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Coloured text that wraps. ⚠ Plain TextColored runs off the window edge, and the
+    /// messages most worth reading are the long ones — an error clipped mid-sentence is
+    /// barely better than no error at all.
+    /// </summary>
+    private static void ErrorText(string text, float indent = 0f)
+    {
+        if (indent > 0f) ImGui.Indent(indent);
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.5f, 0.45f, 1f));
+        ImGui.TextWrapped(text);
+        ImGui.PopStyleColor();
+        if (indent > 0f) ImGui.Unindent(indent);
     }
 
     /// <summary>Trim a link for display; the middle of a paste URL carries no information.</summary>

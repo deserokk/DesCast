@@ -125,8 +125,7 @@ internal sealed class Albums
         var clientId = (config.ImgurClientId ?? string.Empty).Trim();
         if (clientId.Length == 0)
             throw new InvalidOperationException(
-                "Imgur albums need a client id — register one at imgur.com/oauth2/addclient " +
-                "and paste it into settings. A GitHub folder needs no key at all.");
+                "Imgur albums need a client id. There is a button for it in settings.");
 
         var json = await Plugin.FetchTextAsync(
             $"https://api.imgur.com/3/album/{albumId}/images",
