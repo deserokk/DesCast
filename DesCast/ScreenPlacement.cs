@@ -204,6 +204,33 @@ public class ScreenPlacement
     [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public List<string> Sources { get; set; } = new();
 
+    /// <summary>How one slide gives way to the next.</summary>
+    public enum Transition
+    {
+        Cut,
+        Crossfade,
+        WipeDown,
+        WipeUp,
+        WipeRight,
+        WipeLeft,
+    }
+
+    /// <summary>
+    /// ⭐ Both slides are already downloaded and resident — the next one is prefetched so a
+    /// change never flashes the placeholder — so a transition costs a second texture lookup
+    /// and nothing else.
+    /// </summary>
+    public Transition Change { get; set; } = Transition.Crossfade;
+
+    /// <summary>
+    /// How long the change takes.
+    ///
+    /// ⚠⚠ Derived from the wall clock like the slide index itself, never from a timer this
+    /// client started. That is what keeps a room in step: everyone crosses over during the
+    /// same real seconds, so nobody sees a fade the person beside them has already finished.
+    /// </summary>
+    public float ChangeSeconds { get; set; } = 0.8f;
+
     /// <summary>Seconds each slide is held before the next one.</summary>
     public float DwellSeconds { get; set; } = 15f;
 
@@ -234,6 +261,30 @@ public class ScreenPlacement
     /// </summary>
     public string NextSource(DateTimeOffset now)
         => Sources.Count <= 1 ? string.Empty : Sources[(SlideIndexAt(now) + 1) % Sources.Count];
+
+    /// <summary>
+    /// How far through a change we are, 0 to 1, for a rotation of <paramref name="slideCount"/>.
+    /// 0 means settled on the current slide.
+    ///
+    /// ⭐ Position within the dwell comes from the clock, so this is identical on every client
+    /// to the millisecond — the same property that lets slides agree without messages.
+    /// </summary>
+    public float ChangeProgressAt(DateTimeOffset now, int slideCount)
+    {
+        if (slideCount <= 1 || Change == Transition.Cut) return 0f;
+
+        var dwell = MathF.Max(DwellSeconds, 1f);
+        var fade = Math.Clamp(ChangeSeconds, 0f, dwell * 0.9f);
+        if (fade <= 0.001f) return 0f;
+
+        var seconds = now.ToUnixTimeMilliseconds() / 1000.0;
+        var into = (float)(seconds % dwell);
+
+        // The change happens at the end of a slide's turn, so the new one has arrived by the
+        // time the index moves on.
+        var start = dwell - fade;
+        return into < start ? 0f : Math.Clamp((into - start) / fade, 0f, 1f);
+    }
 
     /// <summary>
     /// Fold a pre-slideshow screen into <see cref="Sources"/>. ⭐ A migration, not a

@@ -629,6 +629,29 @@ public sealed class PlacementWindow : Window
                     "Which slide is showing comes from the clock, not from a timer this " +
                     "client started — so everyone in the room sees the same one without " +
                     "anything being sent between you.");
+
+            var change = (int)s.Change;
+            ImGui.SetNextItemWidth(160f);
+            if (ImGui.Combo("Change", ref change,
+                    "Cut Crossfade Wipe down Wipe up Wipe right Wipe left "))
+            {
+                s.Change = (ScreenPlacement.Transition)change;
+                dirty = true;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "How one picture gives way to the next. The next slide is already " +
+                    "downloaded, so this costs nothing.");
+
+            if (s.Change != ScreenPlacement.Transition.Cut)
+            {
+                var fade = s.ChangeSeconds;
+                if (ImGui.SliderFloat("Change takes", ref fade, 0.1f, 5f, "%.1f s"))
+                {
+                    s.ChangeSeconds = fade;
+                    dirty = true;
+                }
+            }
         }
 
         ImGui.Spacing();

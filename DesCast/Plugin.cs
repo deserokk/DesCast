@@ -315,17 +315,24 @@ public sealed class Plugin : IDalamudPlugin
 
             // Warm the next slide while this one is still up, so a change never flashes
             // the placeholder. Cheap: after the first pass it is a dictionary hit.
+            // ⭐ Work the fit out here rather than in the shader: both aspect ratios are
+            // already known on this side, and it keeps the shader branchless.
+            var panelAspect = s.Width / MathF.Max(s.HeightFor(imageAspect), 0.0001f);
+            var (uvScale, clipOutside) = FitUv(s.Fit, panelAspect, imageAspect);
+
+            // The incoming slide, prefetched anyway — a transition just uses what was already
+            // being warmed so a change never flashes the placeholder.
             var next = SlideAt(slides, s, now, 1);
-            if (next.Length > 0) GetContentHandle(next, out _);
+            var nextAspect = 0f;
+            var nextHandle = next.Length > 0 ? GetContentHandle(next, out nextAspect) : 0;
+
+            var progress = s.ChangeProgressAt(now, slides.Count);
+            var (nextUv, _) = FitUv(s.Fit, panelAspect, nextAspect);
 
             // ⭐ Aspect is resolved here, per frame, from whatever the image turned out to
             // be — never written back into the placement. While the image is still
             // decoding the aspect is 0 and the panel keeps its stored size, so a screen
             // does not visibly jump on load unless the picture genuinely is a new shape.
-            // ⭐ Work the fit out here rather than in the shader: both aspect ratios are
-            // already known on this side, and it keeps the shader branchless.
-            var panelAspect = s.Width / MathF.Max(s.HeightFor(imageAspect), 0.0001f);
-            var (uvScale, clipOutside) = FitUv(s.Fit, panelAspect, imageAspect);
 
             drawList.Add(new ScreenRenderer.Panel(
                 s.Position,
@@ -341,7 +348,11 @@ public sealed class Plugin : IDalamudPlugin
                 clipOutside,
                 s.Thickness,
                 s.EdgeColour,
-                handle));
+                handle,
+                nextHandle,
+                nextUv,
+                progress,
+                (int)s.Change));
         }
         if (drawList.Count == 0) return;
 

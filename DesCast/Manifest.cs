@@ -93,6 +93,11 @@ public sealed class ManifestScreen
 
     [JsonProperty("dwell")] public float Dwell { get; set; } = 15f;
 
+    /// <summary>"cut", "crossfade", "wipedown", "wipeup", "wiperight" or "wipeleft".</summary>
+    [JsonProperty("change")] public string Change { get; set; } = "crossfade";
+
+    [JsonProperty("changeSeconds")] public float ChangeSeconds { get; set; } = 0.8f;
+
     [JsonProperty("sources", ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public List<string> Sources { get; set; } = new();
 
@@ -132,6 +137,16 @@ public sealed class ManifestScreen
                 _ => ScreenPlacement.Fitting.Fill,
             },
             DwellSeconds = Dwell,
+            Change = Change?.ToLowerInvariant() switch
+            {
+                "cut" => ScreenPlacement.Transition.Cut,
+                "wipedown" => ScreenPlacement.Transition.WipeDown,
+                "wipeup" => ScreenPlacement.Transition.WipeUp,
+                "wiperight" => ScreenPlacement.Transition.WipeRight,
+                "wipeleft" => ScreenPlacement.Transition.WipeLeft,
+                _ => ScreenPlacement.Transition.Crossfade,
+            },
+            ChangeSeconds = ChangeSeconds,
             Sources = Sources ?? new List<string>(),
             Enabled = true,
         };
@@ -161,6 +176,8 @@ public sealed class ManifestScreen
         Tint = s.Tint == Vector3.One ? null : new[] { s.Tint.X, s.Tint.Y, s.Tint.Z },
         Fitting = s.Fit.ToString().ToLowerInvariant(),
         Dwell = s.DwellSeconds,
+        Change = s.Change.ToString().ToLowerInvariant(),
+        ChangeSeconds = s.ChangeSeconds,
         Sources = new List<string>(s.Sources),
     };
 }

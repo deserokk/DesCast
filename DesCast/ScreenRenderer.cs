@@ -76,6 +76,7 @@ public sealed class ScreenRenderer : IDisposable
         public Vector4 Tint;     // rgb tint
         public Vector4 Uv;       // xy scale about the centre, z half-thickness
         public Vector4 Edge;     // rgb side colour
+        public Vector4 Change;   // x progress, y mode, zw next uv scale
     }
 
     /// <summary>
@@ -108,10 +109,12 @@ cbuffer Params : register(b0)
     float4 Tint;
     float4 Uv;
     float4 Edge;
+    float4 Change;
     float4 UiRects[64];
 };
 
 Texture2D<float4> Content     : register(t0);
+Texture2D<float4> NextContent : register(t2);
 Texture2D<float>  SceneDepth  : register(t1);
 SamplerState      LinearClamp : register(s0);
 
@@ -256,6 +259,36 @@ float4 PSMain(VSOut i) : SV_Target
     if (Grade.w > 0.5 && (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)) discard;
 
     float4 c = Content.SampleLevel(LinearClamp, uv, 0);
+
+    // ⭐ Blend into the next slide. Both are already resident, so this costs one extra
+    // lookup — and the progress comes from the wall clock, so every client in the room
+    // crosses over during the same real seconds.
+    float progress = Change.x;
+    if (progress > 0.0)
+    {
+        // The incoming picture gets its own fit, since an album's images are rarely all
+        // the same shape.
+        float2 nuv = (float2(u * 0.5 + 0.5, 0.5 - v * 0.5) - 0.5) * Change.zw + 0.5;
+        float4 nx = NextContent.SampleLevel(LinearClamp, nuv, 0);
+
+        int mode = (int)Change.y;
+        float mix = progress;
+
+        if (mode >= 2)
+        {
+            // Wipes: a moving edge rather than a global fade. The soft band keeps it from
+            // looking like a hard line sweeping across, which reads as a glitch.
+            float along = (mode == 2) ? (0.5 - v * 0.5)      // down
+                        : (mode == 3) ? (0.5 + v * 0.5)      // up
+                        : (mode == 4) ? (u * 0.5 + 0.5)      // right
+                                      : (0.5 - u * 0.5);     // left
+
+            float edge = progress * 1.2 - 0.1;
+            mix = smoothstep(edge - 0.08, edge + 0.08, 1.0 - along);
+        }
+
+        c = lerp(c, nx, saturate(mix));
+    }
 
     // Colour only. Scaling alpha here as well would make dimming and fading the same
     // control, which is exactly the confusion brightness exists to remove.
@@ -459,7 +492,11 @@ float4 PSMain(VSOut i) : SV_Target
         bool ClipOutside,
         float Thickness,
         Vector3 EdgeColour,
-        nint ContentSrv);
+        nint ContentSrv,
+        nint NextSrv,
+        Vector2 NextUvScale,
+        float ChangeProgress,
+        int ChangeMode);
 
     /// <summary>
     /// Composite every visible panel into the offscreen target.
@@ -529,6 +566,11 @@ float4 PSMain(VSOut i) : SV_Target
                     Tint = new Vector4(panel.Tint, 0f),
                     Uv = new Vector4(panel.UvScale, MathF.Max(panel.Thickness, 0f) * 0.5f, 0f),
                     Edge = new Vector4(panel.EdgeColour, 0f),
+                    Change = new Vector4(
+                        panel.NextSrv != 0 ? Math.Clamp(panel.ChangeProgress, 0f, 1f) : 0f,
+                        panel.ChangeMode,
+                        panel.NextUvScale.X,
+                        panel.NextUvScale.Y),
                 };
 
                 // ⭐ Only shade the pixels this panel can possibly cover. The pass is a
@@ -557,6 +599,13 @@ float4 PSMain(VSOut i) : SV_Target
                 using var content = new ID3D11ShaderResourceView(panel.ContentSrv);
                 ctx.PSSetShaderResource(0, content);
 
+                // ⚠ Bind the outgoing slide even when settled — an unbound slot sampled by a
+                // branch the compiler kept would read whatever was left there last.
+                var nextPtr = panel.NextSrv != 0 ? panel.NextSrv : panel.ContentSrv;
+                Marshal.AddRef(nextPtr);
+                using var nextContent = new ID3D11ShaderResourceView(nextPtr);
+                ctx.PSSetShaderResource(2, nextContent);
+
                 ctx.Draw(3, 0);
                 drew = true;
             }
@@ -574,6 +623,7 @@ float4 PSMain(VSOut i) : SV_Target
             // that the game later wants as a render target is a silent, confusing failure.
             ctx.PSSetShaderResource(0, null);
             ctx.PSSetShaderResource(1, null);
+            ctx.PSSetShaderResource(2, null);
             ctx.OMSetRenderTargets(savedRtvs, savedDsv);
             foreach (var r in savedRtvs) r?.Dispose();
             savedDsv?.Dispose();
