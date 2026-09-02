@@ -273,7 +273,14 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += () => placementWindow.IsOpen = true;
         PluginInterface.UiBuilder.OpenMainUi += () => placementWindow.IsOpen = true;
 
-        if (Config.OpenOnLoad) placementWindow.IsOpen = true;
+        // ⚠⚠ The editor does not open by itself, ever. It used to, behind a config flag
+        // that had no interface — a leftover from iterating, where having the window up on
+        // every login was convenient for one person and an interruption for everyone else.
+        //
+        // ⭐ A participant never needs this window at all: they install, log in, and the
+        // screens are there. Opening a settings panel in front of somebody who has nothing
+        // to configure is the clearest possible signal that a tool was built for its author.
+        // The two handlers above are the ways in — Dalamud's own buttons — plus /descast.
     }
 
     /// <summary>

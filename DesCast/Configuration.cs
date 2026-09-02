@@ -134,7 +134,6 @@ public class Configuration : IPluginConfiguration
     /// </summary>
     public int MaxImageEdge { get; set; } = ImageDecode.DefaultMaxEdge;
 
-    public bool OpenOnLoad { get; set; } = true;
 
     [NonSerialized] private IDalamudPluginInterface? pluginInterface;
 

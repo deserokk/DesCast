@@ -4,6 +4,19 @@ All of this shipped on 2026-09-01, in one evening, with Bunny and Q testing live
 reasons matter more than the version numbers — most of these are bugs that only appear
 when a second person uses the thing.
 
+## 0.4.5
+
+**The editor no longer opens itself when you log in.** It had been doing so behind a config
+flag with no interface — a leftover from iterating, where a window up on every login was
+convenient for one person and an interruption for everyone else.
+
+⭐ Removed rather than defaulted off, because a default would not have helped anyone who
+already had it saved as on. And the flag went with it: a setting nobody could see is not a
+setting.
+
+⚠ The window is still one click away from Dalamud's own plugin buttons, or `/descast`. A
+participant never needs it at all — install, log in, the screens are there.
+
 ## 0.4.4
 
 **Paste a whole link and it becomes the code.** From testing with Bunny: told "just the last
