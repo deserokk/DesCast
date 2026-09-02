@@ -141,6 +141,66 @@ internal static unsafe class UiRects
         return count;
     }
 
+    private static bool IsActionBar(string name)
+        => name.StartsWith("_ActionBar", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Rectangles for the individual buttons of one action bar, with touching buttons
+    /// merged into a run.
+    ///
+    /// ⚠⚠ Action bars need their own walk and cannot use <see cref="CollectPaintedNodes"/>.
+    /// Each button is an <c>AtkComponentNode</c>, and a component's children hang off the
+    /// component's own node list rather than <c>ChildNode</c> — so a plain tree walk never
+    /// reaches the icons at all. Deleting this as duplicated work broke hotbars in 0.1.16.
+    ///
+    /// ⭐ Merging matters twice: a centred twelve-button row collapses to one rectangle
+    /// instead of twelve, and a bar split into clusters keeps the gaps between them, which
+    /// is exactly where Q parks his job gauge.
+    ///
+    /// ⚠ Slots 9-20 are the twelve buttons. Hard-coded layout, taken from Pictomancy, and
+    /// the kind of thing a patch can move — suspect it first if hotbars clip oddly.
+    /// </summary>
+    private static int CollectActionBarButtons(AtkUnitBase* unit, Span<Vector4> into)
+    {
+        const int firstSlot = 9, lastSlot = 20;
+        const float joinGap = 2f;
+
+        var uld = &unit->UldManager;
+        if (uld->NodeList == null || into.Length == 0) return 0;
+
+        var count = 0;
+        for (var slot = firstSlot; slot <= lastSlot && slot < uld->NodeListCount; slot++)
+        {
+            var node = uld->NodeList[slot];
+            if (node == null || (node->NodeFlags & NodeFlags.Visible) == 0) continue;
+
+            var w = node->Width * unit->Scale;
+            var h = node->Height * unit->Scale;
+            if (w <= 0f || h <= 0f) continue;
+
+            var r = new Vector4(node->ScreenX, node->ScreenY,
+                                node->ScreenX + w, node->ScreenY + h);
+
+            var merged = false;
+            for (var j = 0; j < count; j++)
+            {
+                var e = into[j];
+                if (r.X > e.Z + joinGap || r.Z < e.X - joinGap
+                    || r.Y > e.W + joinGap || r.W < e.Y - joinGap) continue;
+
+                into[j] = new Vector4(
+                    MathF.Min(e.X, r.X), MathF.Min(e.Y, r.Y),
+                    MathF.Max(e.Z, r.Z), MathF.Max(e.W, r.W));
+                merged = true;
+                break;
+            }
+
+            if (!merged && count < into.Length) into[count++] = r;
+        }
+
+        return count;
+    }
+
     public static int Collect(Span<Vector4> into, float viewportW, float viewportH)
     {
         var count = 0;
@@ -176,6 +236,12 @@ internal static unsafe class UiRects
                 // buttons to one side and parks his job gauge in the gap he leaves — so a
                 // bar-shaped rectangle would cover the gauge sitting in the hole, and a
                 // good chunk of empty screen with it.
+                if (IsActionBar(name))
+                {
+                    count += CollectActionBarButtons(unit, into[count..]);
+                    continue;
+                }
+
                 if (!isWindow)
                 {
                     count += CollectPaintedNodes(unit, into[count..]);
