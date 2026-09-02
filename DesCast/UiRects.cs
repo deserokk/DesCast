@@ -6,157 +6,118 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 namespace DesCast;
 
 /// <summary>
-/// Screen rectangles of the game's own interface, so screens can be kept from painting
-/// over it.
+/// Screen rectangles of the game's interface, so screens can be kept from painting over it.
 ///
-/// ⚠⚠ The problem this solves: everything drawn through ImGui lands <b>on top of the game's
-/// UI</b>, because Dalamud renders after the game has finished — including its hotbars,
-/// chat and target info. A screen on a wall behind you is fine; a screen between the camera
-/// and your hotbars is not, and Q hit it within minutes of first walking in.
+/// ⚠⚠ The problem: everything drawn through ImGui lands on top of the game's UI, because
+/// Dalamud renders after the game has finished. A screen between the camera and your
+/// hotbars covers them.
 ///
-/// ⭐ The fix is to collect every visible panel's rectangle and discard our pixels inside
-/// them. Xiv Media Player does the same, and Splatoon exposes it as a setting for the same
-/// reason: it is occasionally wrong in the other direction, so it wants a switch.
+/// ⭐⭐ <b>There is no general rule for this, and three attempts to find one all failed the
+/// same way.</b> Root-node size, window bounds, and the union of visibly-drawn children
+/// each measured the box a panel *reserves* rather than what it shows — so the debuff tray,
+/// which sits mid-screen permanently and draws nothing when you have no debuffs, kept
+/// biting rectangles out of posters.
 ///
-/// ⚠ These are bounding boxes, not pixel outlines. A hotbar's box covers the gaps between
-/// its buttons, so this over-culls slightly — a small rectangular bite out of the picture
-/// rather than a perfect silhouette. Being able to see your hotbar is worth more.
+/// Pictomancy — the library behind Splatoon's "automatically clip around native UI" — settles
+/// it: <b>881 lines of hand-written, per-element code</b>, with a dedicated function for the
+/// party list, the chat box, the minimap, the cross hotbar, and one for every job gauge
+/// individually. Nobody found a clever rule because there isn't one.
+///
+/// ⭐ So this is explicit too, and deliberately smaller: the handful of elements that
+/// actually matter in a house, plus anything with a window frame. Being explicit is the
+/// feature — nothing surprises, and an element that should not be culled simply is not
+/// listed. Chris: the alliance list is not worth covering, because being in an alliance
+/// raid while stood in your own house essentially never happens.
 /// </summary>
 internal static unsafe class UiRects
 {
-    /// <summary>
-    /// Rectangles are handed to the shader in a fixed-size constant buffer, so there is a
-    /// ceiling. Thirty-two is comfortably more than the number of panels visible at once
-    /// in normal play, and the largest ones are taken first.
-    /// </summary>
+    /// <summary>Ceiling imposed by the shader's fixed-size constant buffer.</summary>
     public const int Max = 32;
 
     /// <summary>
-    /// Fill <paramref name="into"/> with visible interface rectangles as
-    /// (left, top, right, bottom) in screen pixels. Returns how many were written.
+    /// HUD elements worth protecting indoors. ⚠ Deliberately short. Everything absent from
+    /// this list is a considered omission, not an oversight — status trays and the alliance
+    /// list are left out because covering them costs more than it saves.
     /// </summary>
+    private static readonly string[] Hud =
+    {
+        "_ChatLog",         // chat
+        "_PartyList",
+        "_ActionBar", "_ActionBar01", "_ActionBar02", "_ActionBar03", "_ActionBar04",
+        "_ActionBar05", "_ActionBar06", "_ActionBar07", "_ActionBar08", "_ActionBar09",
+        "_ActionBarEx", "_ActionCross",
+        "_ParameterWidget", // HP and MP
+        "_MainCommand",     // the menu along the bottom
+        "_NaviMap",         // minimap
+    };
+
+    /// <summary>
+    /// Job gauges are named per job — JobHudGNB0, JobHudPLD0 and so on — so they are
+    /// matched by prefix rather than listed. ⭐ Chris asked for the gauge specifically.
+    /// </summary>
+    private const string GaugePrefix = "JobHud";
+
     public static int Collect(Span<Vector4> into, float viewportW, float viewportH)
     {
         var count = 0;
         try
         {
-            var manager = RaptureAtkUnitManager.Instance();
-            if (manager == null) return 0;
+            var stage = AtkStage.Instance();
+            if (stage == null || stage->RaptureAtkUnitManager == null) return 0;
 
-            var units = &manager->AllLoadedUnitsList;
+            var units = &stage->RaptureAtkUnitManager->AtkUnitManager.AllLoadedUnitsList;
+
             for (var i = 0; i < units->Count && count < into.Length; i++)
             {
                 var unit = units->Entries[i].Value;
-                if (unit == null || !unit->IsVisible || !unit->IsReady || unit->RootNode == null)
-                    continue;
+                if (unit == null || !unit->IsVisible || unit->RootNode == null) continue;
+                if (unit->Scale == 0f || unit->Alpha == 0) continue;
 
-                // ⚠ A faded panel is still "visible" by the flag. Alpha is what says
-                // whether anything is actually on screen.
-                if (unit->Alpha == 0) continue;
+                var name = unit->NameString;
+                if (string.IsNullOrEmpty(name)) continue;
 
-                // ⚠⚠ Measure what the panel actually draws, not the box it reserves.
-                //
-                // Two earlier attempts were wrong in the same direction. The root node is
-                // an addon's declared canvas and is routinely far bigger than its content
-                // — the party list's is wide enough to punch a hole across a screen. And
-                // the window bounds still cover reserved-but-empty panels: the debuff
-                // tray sits in the middle of the display at all times, drawing nothing
-                // when you have no debuffs, and took a bite out of a poster for it.
-                //
-                // Unioning the visible children answers the real question — is there
-                // anything here to cover up? — and an empty tray contributes nothing.
-                if (!VisibleContentBounds(unit->RootNode, out var left, out var top, out var right, out var bottom))
-                    continue;
+                // ⭐ Anything with a window frame is something the player deliberately
+                // opened — inventory, character sheet, a shop. Those always want covering,
+                // and the frame is exactly the region they occupy. This one check handles
+                // every window in the game without naming any of them.
+                var isWindow = unit->WindowNode != null;
 
-                var w = right - left;
-                var h = bottom - top;
+                var wanted = isWindow
+                             || name.StartsWith(GaugePrefix, StringComparison.Ordinal)
+                             || Array.IndexOf(Hud, name) >= 0;
+                if (!wanted) continue;
+
+                float left = unit->X, top = unit->Y, w, h;
+
+                if (isWindow)
+                {
+                    // The frame's own node, which is tighter than the addon's canvas.
+                    var frame = &unit->WindowNode->AtkResNode;
+                    w = frame->Width * unit->Scale;
+                    h = frame->Height * unit->Scale;
+                }
+                else
+                {
+                    w = unit->RootNode->Width * unit->Scale;
+                    h = unit->RootNode->Height * unit->Scale;
+                }
+
                 if (w <= 0f || h <= 0f) continue;
 
-                // ⚠ Skip anything effectively fullscreen. Several always-loaded addons are
-                // invisible containers the size of the screen, and culling against one of
-                // those would hide every screen in the house with no clue why.
+                // ⚠ Ignore anything effectively fullscreen: some always-loaded addons are
+                // invisible screen-sized containers, and culling one would hide every
+                // screen in the house with no clue why.
                 if (w >= viewportW * 0.9f && h >= viewportH * 0.9f) continue;
 
-                // ⚠ And skip slivers. A few pixels of something is not what anyone is
-                // trying to read, and each rectangle costs shader work on every pixel.
-                if (w < 16f || h < 16f) continue;
-
-                into[count++] = new Vector4(left, top, right, bottom);
+                into[count++] = new Vector4(left, top, left + w, top + h);
             }
         }
         catch
         {
-            // Never let interface enumeration break rendering — worst case we draw over a
-            // hotbar for a frame, which is the bug we started with rather than a new one.
-            return count;
+            // Never let interface enumeration break rendering. Worst case we draw over a
+            // hotbar, which is the bug we started with rather than a new one.
         }
 
         return count;
-    }
-
-    /// <summary>
-    /// Union of the screen bounds of everything actually drawn under <paramref name="root"/>.
-    /// Returns false when nothing is — an empty panel, which must not be culled against.
-    ///
-    /// ⚠ Node-budgeted. This runs every frame across every loaded addon, and some of them
-    /// have deep trees; a fixed ceiling keeps a pathological one from turning the draw path
-    /// into a tree walk. Running out early only means a slightly loose box, never a hang.
-    /// </summary>
-    private static bool VisibleContentBounds(
-        AtkResNode* root, out float left, out float top, out float right, out float bottom)
-    {
-        left = top = float.MaxValue;
-        right = bottom = float.MinValue;
-
-        if (root == null || (root->NodeFlags & NodeFlags.Visible) == 0) return false;
-
-        var budget = 96;
-        var any = false;
-
-        // Iterative rather than recursive: an unexpected cycle in game data would take the
-        // whole game down with a stack overflow, and there is no catching that.
-        var stack = stackalloc nint[32];
-        var depth = 0;
-        stack[depth++] = (nint)root->ChildNode;
-
-        while (depth > 0 && budget > 0)
-        {
-            var node = (AtkResNode*)stack[--depth];
-
-            for (; node != null && budget-- > 0; node = node->PrevSiblingNode)
-            {
-                if ((node->NodeFlags & NodeFlags.Visible) == 0) continue;
-
-                // ⚠⚠ Only nodes that actually paint pixels count toward the box.
-                //
-                // Container and collision nodes are flagged visible and sized to the whole
-                // addon whether or not anything inside them draws — so unioning them just
-                // reproduces the reserved rectangle this was meant to replace, which is
-                // exactly what it did. Images, text and nine-grids are the things a person
-                // can see; everything else is scaffolding.
-                var paints = node->Type is NodeType.Image or NodeType.Text
-                                          or NodeType.NineGrid or NodeType.Counter;
-
-                // ⚠ And a fully transparent node paints nothing, whatever its type.
-                if (paints && node->Alpha_2 == 0) paints = false;
-
-                var w = node->Width * node->ScaleX;
-                var h = node->Height * node->ScaleY;
-
-                if (paints && w > 0f && h > 0f)
-                {
-                    if (node->ScreenX < left) left = node->ScreenX;
-                    if (node->ScreenY < top) top = node->ScreenY;
-                    if (node->ScreenX + w > right) right = node->ScreenX + w;
-                    if (node->ScreenY + h > bottom) bottom = node->ScreenY + h;
-                    any = true;
-                }
-
-                if (node->ChildNode != null && depth < 32)
-                    stack[depth++] = (nint)node->ChildNode;
-            }
-        }
-
-        return any;
     }
 }
