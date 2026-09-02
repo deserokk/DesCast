@@ -92,7 +92,7 @@ internal static unsafe class UiRects
         if (unit->RootNode == null || into.Length == 0) return 0;
 
         var count = 0;
-        var budget = 160;
+        var budget = 400;   // deeper now that component subtrees are followed
 
         var stack = stackalloc nint[32];
         var depth = 0;
@@ -108,6 +108,19 @@ internal static unsafe class UiRects
 
                 if (node->ChildNode != null && depth < 32)
                     stack[depth++] = (nint)node->ChildNode;
+
+                // ⚠⚠ A component's children do NOT hang off ChildNode — they live in the
+                // component's own node list. Miss this and the walk silently finds nothing
+                // inside chat, hotbars, or any other element built from components, which
+                // reads as "the culling stopped working" rather than as a traversal bug.
+                // Cost two separate regressions before being fixed in the right place.
+                if (node->Type >= NodeType.Component)
+                {
+                    var component = ((AtkComponentNode*)node)->Component;
+                    if (component != null && component->UldManager.NodeList != null
+                        && component->UldManager.NodeListCount > 0 && depth < 32)
+                        stack[depth++] = (nint)component->UldManager.NodeList[0];
+                }
 
                 var paints = node->Type is NodeType.Image or NodeType.Text
                                           or NodeType.NineGrid or NodeType.Counter;
