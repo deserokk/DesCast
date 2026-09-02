@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
@@ -61,10 +61,16 @@ public sealed class ManifestService
     /// published. ⭐ Two sources, one merge point, so nothing downstream has to care which
     /// a screen came from.
     /// </summary>
-    private IEnumerable<string> RootUrls()
+    /// <summary>
+    /// ⚠ Returns a copy rather than walking the live lists. See <see cref="Status"/> for why
+    /// nothing in this class hands out a lazy enumerator any more.
+    /// </summary>
+    private List<string> RootUrls()
     {
-        foreach (var u in config.CompanyBoardUrls) yield return u;
-        foreach (var u in config.ManifestUrls) yield return u;
+        var urls = new List<string>(config.CompanyBoardUrls.Count + config.ManifestUrls.Count);
+        urls.AddRange(config.CompanyBoardUrls);
+        urls.AddRange(config.ManifestUrls);
+        return urls;
     }
 
     /// <summary>
@@ -105,17 +111,37 @@ public sealed class ManifestService
         return wanted;
     }
 
-    /// <summary>Per-subscription state, for the editor to show. Never throws, never blocks.</summary>
-    public IEnumerable<(string Url, int Count, string? Error, DateTimeOffset? LoadedAt, bool Fetching)> Status()
+    /// <summary>
+    /// Per-subscription state, for the editor to show. Never throws, never blocks.
+    ///
+    /// ⚠⚠ <b>Built as a list, not yielded.</b> A lazy iterator here walks
+    /// <c>config.ManifestUrls</c> while the caller is still drawing — and the caller is an
+    /// editor whose whole job is to change that list. Editing a URL in the text box assigns
+    /// through the list indexer, which bumps its version counter, and the next step of the
+    /// loop throws "Collection was modified".
+    ///
+    /// ⚠ It was invisible with one manifest subscribed, because the loop had already
+    /// finished. The second entry is what made it fire — so the bug arrived exactly when
+    /// somebody first shared a room, which is the worst possible moment for it.
+    ///
+    /// ⭐ A snapshot also makes the caller's life simple: it may add, remove or edit
+    /// entries freely while iterating, and merely sees the previous frame's list for the
+    /// remainder of that frame. Nobody can perceive one frame.
+    /// Found by Chris and Bunny, 2026-09-02.
+    /// </summary>
+    public List<(string Url, int Count, string? Error, DateTimeOffset? LoadedAt, bool Fetching)> Status()
     {
+        var status = new List<(string, int, string?, DateTimeOffset?, bool)>(config.ManifestUrls.Count);
+
         foreach (var raw in config.ManifestUrls)
         {
             var url = raw.Trim();
-            if (subscriptions.TryGetValue(url, out var sub))
-                yield return (url, sub.Screens.Count, sub.Error, sub.LoadedAt, sub.Fetching);
-            else
-                yield return (url, 0, null, null, false);
+            status.Add(subscriptions.TryGetValue(url, out var sub)
+                ? (url, sub.Screens.Count, sub.Error, sub.LoadedAt, sub.Fetching)
+                : (url, 0, null, null, false));
         }
+
+        return status;
     }
 
     /// <summary>
@@ -123,16 +149,24 @@ public sealed class ManifestService
     /// member rooms. ⭐ Listed separately in the editor so it is obvious where a screen came from,
     /// and so a member's broken file is visibly theirs rather than looking like the company's.
     /// </summary>
-    public IEnumerable<(string Url, int Count, string? Error)> IncludedStatus()
+    public List<(string Url, int Count, string? Error)> IncludedStatus()
     {
         var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var r in RootUrls()) roots.Add(r.Trim());
 
+        // ⚠ Materialised for the reason given on Status, and for a second one: this walks
+        // the subscriptions dictionary, which Tick adds to as manifests are discovered. A
+        // lazy walk here would break the moment a company file pulled in a member's room
+        // while the editor happened to be open — rare, undebuggable, and entirely avoidable.
+        var included = new List<(string, int, string?)>();
+
         foreach (var (url, sub) in subscriptions)
         {
             if (roots.Contains(url)) continue;
-            yield return (url, sub.Screens.Count, sub.Error);
+            included.Add((url, sub.Screens.Count, sub.Error));
         }
+
+        return included;
     }
 
     /// <summary>

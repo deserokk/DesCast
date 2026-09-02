@@ -4,6 +4,24 @@ All of this shipped on 2026-09-01, in one evening, with Bunny and Q testing live
 reasons matter more than the version numbers — most of these are bugs that only appear
 when a second person uses the thing.
 
+## 0.4.2
+
+**Editing a manifest URL no longer throws.** The editor listed subscribed manifests by
+walking a lazy enumerator over the very list it lets you edit, so assigning through the
+text box bumped the list's version counter and the next step of the loop threw *"Collection
+was modified"*. The value was saved before it threw, which is why the screen worked and the
+error appeared anyway — a confusing pair to be handed.
+
+⚠⚠ It was invisible with one manifest subscribed, because the loop had already finished.
+**The second entry is what made it fire** — so the bug waited until somebody first shared a
+room and then went off during the thing it was there to enable. Every status list is now
+built as a snapshot before it is drawn.
+
+The same trap was waiting in the included-manifests list, where a company file pulling in a
+member's room while the editor was open would have done the same thing. Fixed there too.
+
+Found by Chris and Bunny.
+
 ## 0.4.1
 
 **GIFs cost roughly a tenth of what they did**, from two changes that give up nothing
