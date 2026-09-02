@@ -2,7 +2,7 @@
   "Author": "deserokk",
   "Name": "DesCast",
   "InternalName": "DesCast",
-  "Description": "Places flat screens anywhere in a house. They sit in world space, foreshorten correctly from any angle, and are properly hidden by walls, furniture and people walking in front of them.\n\nShow a picture from your PC or a link, or several on a rotation. Transparent images keep their transparency, so a crest or a cut-out sign floats rather than sitting in a black box.\n\nPoint everyone at one shared file and the whole Free Company sees the same boards, whether or not the person who placed them is online.",
+  "Description": "Flat screens placed anywhere in a house, correctly hidden by walls and people. Shows an image or a rotating set, from your PC or a link, and a whole room of them can be shared with your Free Company from one file.",
   "ApplicableVersion": "any",
   "Tags": [
     "housing",
