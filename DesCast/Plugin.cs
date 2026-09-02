@@ -89,6 +89,19 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Dictionary<string, ContentEntry> content = new();
     private IDalamudTextureWrap? testCard;
 
+    /// <summary>
+    /// How many images may be fetching at once.
+    ///
+    /// ⭐ One, deliberately. Walking into a room with three screens on rotation would
+    /// otherwise start six downloads and six decodes in the same frame — and the decode
+    /// and upload land back on the render thread, so a burst becomes a visible stall
+    /// exactly when someone first sees the room. Serialised, each arrives a moment later
+    /// and nothing hitches; the test card covers the gap, which is what it is for.
+    /// </summary>
+    private const int MaxConcurrentLoads = 1;
+
+    private int loadsInFlight;
+
     /// <summary>Image-load failures, keyed by the path as the user typed it. For the editor.</summary>
     internal IReadOnlyDictionary<string, string> ContentErrors
     {
@@ -331,8 +344,14 @@ public sealed class Plugin : IDalamudPlugin
             return (nint)w.Handle.Handle;
         }
 
+        // ⚠ Over the limit: do not create an entry. Leaving it unknown means the next
+        // frame asks again, which is the whole queue — no list, no ordering, no way for a
+        // dropped request to be lost.
+        if (loadsInFlight >= MaxConcurrentLoads) return testCardHandle;
+
         entry = new ContentEntry { Loading = true };
         content[path] = entry;
+        System.Threading.Interlocked.Increment(ref loadsInFlight);
 
         // ⚠⚠ Never block here. This runs on the render thread, and waiting on a decode
         // stalls the whole game's frame — and waiting on a task that may itself want the
@@ -368,6 +387,10 @@ public sealed class Plugin : IDalamudPlugin
                 entry.Error = ex.Message;
                 entry.Loading = false;
                 Log.Warning($"Could not load screen image '{path}': {ex.Message}");
+            }
+            finally
+            {
+                System.Threading.Interlocked.Decrement(ref loadsInFlight);
             }
         });
 

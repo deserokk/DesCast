@@ -42,6 +42,13 @@ public sealed class ScreenRenderer : IDisposable
 
     public bool Initialised { get; private set; }
 
+    // ⭐ Compiling HLSL costs ~170ms and was doing it inside the draw callback, which is a
+    // visible stall the first time you walk into a room with a screen. The compiler is
+    // pure CPU and never touches the D3D device, so it moves to a worker thread safely —
+    // ⚠ but creating the shader objects does touch the device and stays on this thread.
+    // That split is the whole point: compile off-thread, create on-thread.
+    private System.Threading.Tasks.Task<(ReadOnlyMemory<byte> Vs, ReadOnlyMemory<byte> Ps)>? compileTask;
+
     /// <summary>Non-null when something failed. Surfaced in the editor — never swallowed.</summary>
     public string? Error { get; private set; }
 
@@ -149,15 +156,28 @@ float4 PSMain(VSOut i) : SV_Target
         if (Initialised) return true;
         if (!game.Ready) return false;
 
+        // ⚠ Compiled at runtime rather than shipped as bytecode: the shader source stays
+        // readable next to the code that explains it, instead of being an opaque blob.
+        // Started once, on a worker; every frame until it finishes simply draws nothing.
+        compileTask ??= System.Threading.Tasks.Task.Run(() =>
+        {
+            if (!TryCompile("VSMain", "vs_5_0", out var v)) throw new InvalidOperationException(Error ?? "vertex shader");
+            if (!TryCompile("PSMain", "ps_5_0", out var p)) throw new InvalidOperationException(Error ?? "pixel shader");
+            return (v, p);
+        });
+
+        if (!compileTask.IsCompleted) return false;
+
+        if (compileTask.IsFaulted)
+        {
+            Error ??= compileTask.Exception?.GetBaseException().Message ?? "Shader compilation failed.";
+            return false;
+        }
+
         try
         {
             var dev = game.Device!;
-
-            // ⚠ Compiled at runtime rather than shipped as bytecode. It costs a few
-            // milliseconds once, and it means the shader source is readable next to the
-            // code that explains it instead of being an opaque blob in the repo.
-            if (!TryCompile("VSMain", "vs_5_0", out var vsCode)) return false;
-            if (!TryCompile("PSMain", "ps_5_0", out var psCode)) return false;
+            var (vsCode, psCode) = compileTask.Result;
 
             vs = dev.CreateVertexShader(vsCode.Span);
             ps = dev.CreatePixelShader(psCode.Span);
