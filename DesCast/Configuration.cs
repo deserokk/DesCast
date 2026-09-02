@@ -51,6 +51,16 @@ public class Configuration : IPluginConfiguration
     public List<string> ManifestUrls { get; set; } = new();
 
     /// <summary>
+    /// Imgur application id, needed to list an album's contents.
+    ///
+    /// ⚠ Not a secret in the way a bot token is: it identifies the application rather than a
+    /// person, and grants nothing beyond reading public content. It still has to be registered
+    /// once at imgur.com/oauth2/addclient, which is why it is a setting rather than shipped.
+    /// ⭐ A GitHub folder needs no key at all, if you would rather skip the registration.
+    /// </summary>
+    public string ImgurClientId { get; set; } = string.Empty;
+
+    /// <summary>
     /// Member room files kept for the company manifest builder.
     ///
     /// ⚠ Purely a convenience list for whoever assembles the company file — these are not

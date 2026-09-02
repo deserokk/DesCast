@@ -66,6 +66,7 @@ public sealed class Plugin : IDalamudPlugin
     internal GameView Game { get; }
     internal ScreenRenderer Renderer { get; }
     internal ManifestService Manifest { get; }
+    internal Albums Albums { get; }
     internal CompanyBoard Board { get; }
 
     private readonly WindowSystem windows = new("DesCast");
@@ -154,6 +155,7 @@ public sealed class Plugin : IDalamudPlugin
         Game = new GameView();
         Renderer = new ScreenRenderer(Game);
         Manifest = new ManifestService(Config);
+        Albums = new Albums(Config);
         Board = new CompanyBoard(Config);
 
         placementWindow = new PlacementWindow(this);
@@ -292,12 +294,18 @@ public sealed class Plugin : IDalamudPlugin
         foreach (var s in ScreensHere(location.Value))
         {
             var now = DateTimeOffset.UtcNow;
-            var handle = GetContentHandle(s.CurrentSource(now), out var imageAspect);
+
+            // ⭐ Albums are expanded here, so everything downstream sees a plain list of
+            // pictures. The wall-clock slide index then runs over the album's contents
+            // exactly as it does over a hand-written list — adding a poster to an album
+            // lengthens the rotation for everyone with nothing else changing.
+            var slides = ExpandSources(s);
+            var handle = GetContentHandle(SlideAt(slides, s, now, 0), out var imageAspect);
             if (handle == 0) continue;
 
             // Warm the next slide while this one is still up, so a change never flashes
             // the placeholder. Cheap: after the first pass it is a dictionary hit.
-            var next = s.NextSource(now);
+            var next = SlideAt(slides, s, now, 1);
             if (next.Length > 0) GetContentHandle(next, out _);
 
             // ⭐ Aspect is resolved here, per frame, from whatever the image turned out to
@@ -345,6 +353,44 @@ public sealed class Plugin : IDalamudPlugin
         // image in the background draw list — under every ImGui window, over the game.
         ImGui.GetBackgroundDrawList(viewport)
              .AddImage(new ImTextureID(output), viewport.Pos, viewport.Pos + size);
+    }
+
+    /// <summary>
+    /// A screen's sources with any albums replaced by their contents.
+    ///
+    /// ⚠ Reused per screen per frame, so it allocates only when a screen actually contains an
+    /// album — the common case of a couple of plain links returns the list it was given.
+    /// </summary>
+    private List<string> ExpandSources(ScreenPlacement s)
+    {
+        var anyAlbum = false;
+        foreach (var src in s.Sources)
+            if (Albums.IsAlbum(src)) { anyAlbum = true; break; }
+
+        if (!anyAlbum) return s.Sources;
+
+        var expanded = new List<string>(s.Sources.Count + 8);
+        foreach (var src in s.Sources)
+        {
+            if (!Albums.IsAlbum(src)) { expanded.Add(src); continue; }
+            foreach (var image in Albums.Images(src)) expanded.Add(image);
+        }
+        return expanded;
+    }
+
+    /// <summary>
+    /// The slide <paramref name="offset"/> steps from the current one, derived from the wall
+    /// clock so every client in the room lands on the same picture without exchanging anything.
+    /// </summary>
+    private static string SlideAt(
+        List<string> slides, ScreenPlacement s, DateTimeOffset now, int offset)
+    {
+        if (slides.Count == 0) return string.Empty;
+        if (slides.Count == 1) return slides[0];
+
+        var dwell = MathF.Max(s.DwellSeconds, 1f);
+        var index = (int)(now.ToUnixTimeMilliseconds() / 1000.0 / dwell % slides.Count);
+        return slides[(index + offset) % slides.Count];
     }
 
     /// <summary>
@@ -552,13 +598,16 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>Fetch a text document — the manifest. Same client, same limits.</summary>
-    internal static async System.Threading.Tasks.Task<string> FetchTextAsync(string url)
+    internal static async System.Threading.Tasks.Task<string> FetchTextAsync(
+        string url, params (string Name, string Value)[] headers)
     {
         var resolved = ResolveTextUrl(url);
 
         using var request = new System.Net.Http.HttpRequestMessage(
             System.Net.Http.HttpMethod.Get, resolved);
         request.Headers.TryAddWithoutValidation("User-Agent", "DesCast/0.1 (FFXIV Dalamud plugin)");
+        foreach (var (name, value) in headers)
+            request.Headers.TryAddWithoutValidation(name, value);
 
         using var response = await Http.SendAsync(request).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -570,7 +619,7 @@ public sealed class Plugin : IDalamudPlugin
         // ⚠ Catch the web-page case here, where we can say something useful, instead of
         // letting the JSON parser complain about an unexpected "<" at position 0 — an
         // error that tells the reader nothing about what they actually did wrong.
-        if (body.TrimStart().StartsWith('<'))
+        if (body.TrimStart().StartsWith('<'))   // HTML, not the file itself
             throw new InvalidOperationException(
                 "That link returned a web page, not the file itself. Use the raw link — " +
                 "on Pastebin that is the RAW button; on GitHub or a gist, the Raw button.");

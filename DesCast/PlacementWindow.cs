@@ -83,6 +83,22 @@ public sealed class PlacementWindow : Window
                 "If a screen appears with this on and vanishes with it off, the panel\n" +
                 "is in the right place and only the wall test is wrong.");
 
+        var imgurId = cfg.ImgurClientId;
+        ImGui.SetNextItemWidth(200f);
+        if (ImGui.InputText("Imgur client id", ref imgurId, 64))
+        {
+            cfg.ImgurClientId = imgurId.Trim();
+            cfg.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "Only needed to use Imgur albums. Register one free at " +
+                "imgur.com/oauth2/addclient (choose \"anonymous usage without a callback\").
+
+" +
+                "It is not a password: it identifies the app, not you, and only reads public " +
+                "content. Everyone can use the same one.");
+
         ImGui.Separator();
 
         // ── Shared rooms ──────────────────────────────────────────────────────────────
@@ -548,6 +564,18 @@ public sealed class PlacementWindow : Window
             if (plugin.ContentErrors.TryGetValue(s.Sources[i], out var err))
                 ImGui.TextColored(new Vector4(1f, 0.45f, 0.45f, 1f), $"   {err}");
 
+            // An album is one line that stands for many pictures; say how many, or the
+            // rotation length is a mystery.
+            if (Albums.IsAlbum(s.Sources[i]))
+            {
+                var n = plugin.Albums.CountFor(s.Sources[i]);
+                var albumErr = plugin.Albums.ErrorFor(s.Sources[i]);
+                if (albumErr is not null)
+                    ImGui.TextColored(new Vector4(1f, 0.45f, 0.45f, 1f), $"   {albumErr}");
+                else
+                    ImGui.TextDisabled(n == 0 ? "   album — reading..." : $"   album — {n} picture(s)");
+            }
+
             ImGui.PopID();
         }
 
@@ -561,12 +589,17 @@ public sealed class PlacementWindow : Window
                 "adds are stripped for you.\n\n" +
                 "Web: must link to the picture itself, not the page it sits on. An " +
                 "imgur.com/... link is rewritten to the direct image automatically.\n\n" +
-                "Add more than one and the screen cycles through them.");
+                "Add more than one and the screen cycles through them.\n\n" +
+                "An Imgur album link works too: drop a poster in the album and every " +
+                "screen picks it up, with nothing here to edit.");
 
         if (s.Sources.Count == 0)
             ImGui.TextDisabled("Nothing set — showing the test card.");
 
-        if (s.Sources.Count > 1)
+        var rotates = s.Sources.Count > 1
+                      || (s.Sources.Count == 1 && Albums.IsAlbum(s.Sources[0])
+                          && plugin.Albums.CountFor(s.Sources[0]) > 1);
+        if (rotates)
         {
             var dwell = s.DwellSeconds;
             if (ImGui.DragFloat("Seconds per slide", ref dwell, 0.5f, 1f, 600f))
