@@ -51,6 +51,16 @@ public class Configuration : IPluginConfiguration
     public List<string> ManifestUrls { get; set; } = new();
 
     /// <summary>
+    /// Member room files kept for the company manifest builder.
+    ///
+    /// ⚠ Purely a convenience list for whoever assembles the company file — these are not
+    /// subscribed to. Subscribing happens through the company file's own include list, so
+    /// this is a notepad rather than a second source of truth.
+    /// </summary>
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<string> BuilderEntries { get; set; } = new();
+
+    /// <summary>
     /// Screen links found on the Free Company board, cached.
     ///
     /// ⭐ Kept separate from <see cref="ManifestUrls"/> rather than merged into it. The

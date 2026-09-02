@@ -531,6 +531,26 @@ public sealed class Plugin : IDalamudPlugin
         return hasDigit && hasLetter;
     }
 
+    /// <summary>
+    /// Build a company manifest that points at member room files rather than copying their
+    /// contents.
+    ///
+    /// ⭐⭐ Chris' design, and better than copying entries: a copy is a snapshot that goes stale
+    /// the moment a member changes a poster, and someone has to re-paste it. A list of links means
+    /// members edit their own rooms freely, the officer owns only the roster, and removing someone
+    /// is deleting one line and republishing.
+    /// </summary>
+    internal string BuildCompanyManifest(IReadOnlyList<string> memberFiles)
+    {
+        var manifest = new Manifest();
+        foreach (var raw in memberFiles)
+        {
+            var url = raw.Trim();
+            if (url.Length > 0) manifest.Include.Add(url);
+        }
+        return Newtonsoft.Json.JsonConvert.SerializeObject(manifest, Newtonsoft.Json.Formatting.Indented);
+    }
+
     /// <summary>Fetch a text document — the manifest. Same client, same limits.</summary>
     internal static async System.Threading.Tasks.Task<string> FetchTextAsync(string url)
     {

@@ -21,6 +21,21 @@ public sealed class Manifest
 
     [JsonProperty("screens", ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public List<ManifestScreen> Screens { get; set; } = new();
+
+    /// <summary>
+    /// Other manifests to pull in. ⭐⭐ This is what makes a company file a *roster* rather than a
+    /// copy.
+    ///
+    /// Chris' design: each member keeps their own room file and edits it freely; the company file
+    /// simply lists them. Copying entries instead would make the company file a snapshot that goes
+    /// stale the moment anyone changes a poster, and someone would have to re-paste it every time.
+    /// Pointing at files means ownership splits cleanly — the officer owns who is included, each
+    /// member owns what is in their own room — and removing someone is deleting one line.
+    ///
+    /// ⚠ Fetched recursively, so cycles and depth are guarded in <see cref="ManifestService"/>.
+    /// </summary>
+    [JsonProperty("include", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<string> Include { get; set; } = new();
 }
 
 public sealed class ManifestScreen

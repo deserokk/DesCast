@@ -173,6 +173,60 @@ public sealed class PlacementWindow : Window
             if (ImGui.Button("Refresh all")) plugin.Manifest.RefreshNow();
         }
 
+        // Rooms reached through a company file's include list, shown separately so it is
+        // obvious where a screen came from — and so a member's broken file reads as theirs
+        // rather than as the company's.
+        var inc = 0;
+        foreach (var (iurl, icount, ierr) in plugin.Manifest.IncludedStatus())
+        {
+            if (inc++ == 0) ImGui.TextDisabled("Rooms listed by those files:");
+            ImGui.TextDisabled($"   {Shorten(iurl)}  —  {icount} screen(s)");
+            if (ierr is not null)
+                ImGui.TextColored(new Vector4(1f, 0.5f, 0.45f, 1f), $"      {ierr}");
+        }
+
+        if (ImGui.CollapsingHeader("Build a company file"))
+        {
+            ImGui.TextWrapped(
+                "List each member's own room file here. They keep editing theirs; you only " +
+                "own who is on the list. Removing someone is deleting a line and republishing.");
+
+            var removeAt = -1;
+            for (var i = 0; i < cfg.BuilderEntries.Count; i++)
+            {
+                ImGui.PushID(2000 + i);
+                var entry = cfg.BuilderEntries[i];
+                ImGui.SetNextItemWidth(300f);
+                if (ImGui.InputText("##be", ref entry, 512))
+                {
+                    cfg.BuilderEntries[i] = entry.Trim();
+                    cfg.Save();
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("x")) removeAt = i;
+                ImGui.PopID();
+            }
+
+            if (removeAt >= 0) { cfg.BuilderEntries.RemoveAt(removeAt); cfg.Save(); }
+
+            if (ImGui.Button("Add a room file")) { cfg.BuilderEntries.Add(string.Empty); cfg.Save(); }
+
+            if (cfg.BuilderEntries.Count > 0)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button("Copy company file"))
+                {
+                    ImGui.SetClipboardText(plugin.BuildCompanyManifest(cfg.BuilderEntries));
+                    copiedAt = DateTimeOffset.UtcNow;
+                }
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(
+                        "Paste this into the file your company board points at.\n\n" +
+                        "It contains links, not copies — so a member changing their own room " +
+                        "shows up for everyone without you touching this again.");
+            }
+        }
+
         // ── Placing ───────────────────────────────────────────────────────────────────
         var canPlace = location is not null && plugin.Game.CanPlaceHere();
         if (!canPlace) ImGui.BeginDisabled();
@@ -537,6 +591,10 @@ public sealed class PlacementWindow : Window
 
         if (dirty) cfg.Save();
     }
+
+    /// <summary>Trim a link for display; the middle of a paste URL carries no information.</summary>
+    private static string Shorten(string url)
+        => url.Length <= 46 ? url : url[..28] + "..." + url[^12..];
 
     /// <summary>Panel-left in world terms, for the nudge buttons.</summary>
     private static Vector3 LeftOf(ScreenPlacement s)

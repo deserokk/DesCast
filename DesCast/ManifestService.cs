@@ -31,9 +31,17 @@ public sealed class ManifestService
     /// <summary>How long to wait before retrying a subscription that has never loaded.</summary>
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// How deep an include chain may go. ⚠ A company file listing member files is one level; a
+    /// member listing a friend's is two. Beyond that is almost certainly a mistake, and the cap
+    /// means a malicious or accidental chain cannot fan out indefinitely.
+    /// </summary>
+    private const int MaxIncludeDepth = 3;
+
     private sealed class Subscription
     {
         public IReadOnlyList<ScreenPlacement> Screens = Array.Empty<ScreenPlacement>();
+        public IReadOnlyList<string> Include = Array.Empty<string>();
         public string? Error;
         public DateTimeOffset? LoadedAt;
         public DateTimeOffset LastAttempt = DateTimeOffset.MinValue;
@@ -53,10 +61,48 @@ public sealed class ManifestService
     /// published. ⭐ Two sources, one merge point, so nothing downstream has to care which
     /// a screen came from.
     /// </summary>
-    private IEnumerable<string> AllUrls()
+    private IEnumerable<string> RootUrls()
     {
         foreach (var u in config.CompanyBoardUrls) yield return u;
         foreach (var u in config.ManifestUrls) yield return u;
+    }
+
+    /// <summary>
+    /// Every manifest we should be holding: the roots the user subscribes to, plus everything
+    /// those pull in, transitively.
+    ///
+    /// ⚠⚠ Cycle-safe by construction. A file that includes itself, or two that include each
+    /// other, would otherwise fetch forever — and the person who wrote them would have no way to
+    /// tell, because from in game it just looks like the screens never appear. The visited set
+    /// makes a cycle harmless rather than fatal.
+    /// </summary>
+    private HashSet<string> ResolveWanted()
+    {
+        var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var frontier = new List<string>();
+
+        foreach (var raw in RootUrls())
+        {
+            var url = raw.Trim();
+            if (url.Length > 0 && wanted.Add(url)) frontier.Add(url);
+        }
+
+        for (var depth = 0; depth < MaxIncludeDepth && frontier.Count > 0; depth++)
+        {
+            var next = new List<string>();
+            foreach (var url in frontier)
+            {
+                if (!subscriptions.TryGetValue(url, out var sub)) continue;
+                foreach (var raw in sub.Include)
+                {
+                    var child = raw.Trim();
+                    if (child.Length > 0 && wanted.Add(child)) next.Add(child);
+                }
+            }
+            frontier = next;
+        }
+
+        return wanted;
     }
 
     /// <summary>Per-subscription state, for the editor to show. Never throws, never blocks.</summary>
@@ -73,20 +119,33 @@ public sealed class ManifestService
     }
 
     /// <summary>
+    /// Manifests reached through an include rather than subscribed to directly — a company file's
+    /// member rooms. ⭐ Listed separately in the editor so it is obvious where a screen came from,
+    /// and so a member's broken file is visibly theirs rather than looking like the company's.
+    /// </summary>
+    public IEnumerable<(string Url, int Count, string? Error)> IncludedStatus()
+    {
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in RootUrls()) roots.Add(r.Trim());
+
+        foreach (var (url, sub) in subscriptions)
+        {
+            if (roots.Contains(url)) continue;
+            yield return (url, sub.Screens.Count, sub.Error);
+        }
+    }
+
+    /// <summary>
     /// Called every frame; almost always does nothing. ⚠ Kept to dictionary lookups and a
     /// timestamp comparison, because anything on a draw path runs at frame rate.
     /// </summary>
     public void Tick()
     {
         var changed = false;
-        var wanted = new HashSet<string>();
+        var wanted = ResolveWanted();
 
-        foreach (var raw in AllUrls())
+        foreach (var url in wanted)
         {
-            var url = raw.Trim();
-            if (url.Length == 0) continue;
-            if (!wanted.Add(url)) continue;   // the same link on the board and in your list is one subscription
-
             if (!subscriptions.TryGetValue(url, out var sub))
             {
                 sub = new Subscription();
@@ -152,6 +211,7 @@ public sealed class ManifestService
             }
 
             sub.Screens = placements;
+            sub.Include = manifest.Include ?? new List<string>();
             sub.LoadedAt = DateTimeOffset.UtcNow;
 
             // ⚠ Partial success is still worth reporting. An entry with a broken house id
