@@ -304,12 +304,23 @@ public sealed class Plugin : IDalamudPlugin
             // be — never written back into the placement. While the image is still
             // decoding the aspect is 0 and the panel keeps its stored size, so a screen
             // does not visibly jump on load unless the picture genuinely is a new shape.
+            // ⭐ Work the fit out here rather than in the shader: both aspect ratios are
+            // already known on this side, and it keeps the shader branchless.
+            var panelAspect = s.Width / MathF.Max(s.HeightFor(imageAspect), 0.0001f);
+            var (uvScale, clipOutside) = FitUv(s.Fit, panelAspect, imageAspect);
+
             drawList.Add(new ScreenRenderer.Panel(
                 s.Position,
                 s.AxisX,
                 s.AxisYFor(imageAspect),
                 s.Opacity,
                 s.Brightness,
+                s.Contrast,
+                s.Saturation,
+                s.Tint,
+                s.EdgeSoftness,
+                uvScale,
+                clipOutside,
                 handle));
         }
         if (drawList.Count == 0) return;
@@ -334,6 +345,30 @@ public sealed class Plugin : IDalamudPlugin
         // image in the background draw list — under every ImGui window, over the game.
         ImGui.GetBackgroundDrawList(viewport)
              .AddImage(new ImTextureID(output), viewport.Pos, viewport.Pos + size);
+    }
+
+    /// <summary>
+    /// How far to scale the texture coordinates about the centre so a picture sits
+    /// correctly on a panel of a different shape.
+    ///
+    /// Below 1 on an axis crops that axis (fill); above 1 insets it, leaving emptiness
+    /// (letterbox). ⚠ Returns 1,1 when the image's shape is not known yet — a picture still
+    /// downloading must not make the panel jump.
+    /// </summary>
+    private static (Vector2 Scale, bool ClipOutside) FitUv(
+        ScreenPlacement.Fitting mode, float panelAspect, float imageAspect)
+    {
+        if (mode == ScreenPlacement.Fitting.Stretch
+            || imageAspect <= 0.0001f || panelAspect <= 0.0001f)
+            return (Vector2.One, false);
+
+        var ratio = panelAspect / imageAspect;
+
+        return mode == ScreenPlacement.Fitting.Fill
+            // Cover: shrink the coordinates on the axis with room to spare, cropping it.
+            ? (ratio > 1f ? new Vector2(1f, 1f / ratio) : new Vector2(ratio, 1f), false)
+            // Contain: expand that axis instead, and clip what falls outside.
+            : (ratio > 1f ? new Vector2(ratio, 1f) : new Vector2(1f, 1f / ratio), true);
     }
 
     /// <summary>

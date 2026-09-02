@@ -72,6 +72,9 @@ public sealed class ScreenRenderer : IDisposable
         public Vector4 AxisY;    // xyz = half-height vector
         public Vector4 Flags;    // x reverseZ, y disableOcclusion, z depthW, w depthH
         public Vector4 Flags2;   // x = interface rectangle count, y = brightness
+        public Vector4 Grade;    // x contrast, y saturation, z edge softness, w clip-outside
+        public Vector4 Tint;     // rgb tint
+        public Vector4 Uv;       // xy scale about the centre
     }
 
     /// <summary>
@@ -100,7 +103,10 @@ cbuffer Params : register(b0)
     float4 AxisY;
     float4 Flags;
     float4 Flags2;
-    float4 UiRects[32];
+    float4 Grade;
+    float4 Tint;
+    float4 Uv;
+    float4 UiRects[64];
 };
 
 Texture2D<float4> Content     : register(t0);
@@ -174,11 +180,37 @@ float4 PSMain(VSOut i) : SV_Target
     }
 
     float2 uv = float2(u * 0.5 + 0.5, 0.5 - v * 0.5);
+
+    // Fit the picture to a panel of a different shape. The scale is worked out on the CPU
+    // from the two aspect ratios: below 1 crops (fill), above 1 insets (letterbox), 1 is
+    // an untouched stretch.
+    uv = (uv - 0.5) * Uv.xy + 0.5;
+
+    // Letterboxing leaves real emptiness rather than smeared edge pixels.
+    if (Grade.w > 0.5 && (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)) discard;
+
     float4 c = Content.SampleLevel(LinearClamp, uv, 0);
 
     // Colour only. Scaling alpha here as well would make dimming and fading the same
-    // control, which is exactly the confusion this setting exists to remove.
+    // control, which is exactly the confusion brightness exists to remove.
     c.rgb *= Flags2.y;
+    c.rgb *= Tint.rgb;
+    c.rgb = (c.rgb - 0.5) * Grade.x + 0.5;
+
+    // Rec. 709 luminance, so desaturating does not lighten or darken the picture.
+    float luma = dot(c.rgb, float3(0.2126, 0.7152, 0.0722));
+    c.rgb = lerp(luma.xxx, c.rgb, Grade.y);
+
+    c.rgb = saturate(c.rgb);
+
+    // Soften the panel's own edge, in panel space rather than image space, so the fade
+    // stays put when the picture is cropped or letterboxed.
+    if (Grade.z > 0.0001)
+    {
+        float edge = 1.0 - max(abs(u), abs(v));
+        c.a *= smoothstep(0.0, Grade.z, edge);
+    }
+
     c.a *= Center.w;
     return c;
 }
@@ -353,6 +385,12 @@ float4 PSMain(VSOut i) : SV_Target
         Vector3 AxisY,
         float Opacity,
         float Brightness,
+        float Contrast,
+        float Saturation,
+        Vector3 Tint,
+        float EdgeSoftness,
+        Vector2 UvScale,
+        bool ClipOutside,
         nint ContentSrv);
 
     /// <summary>
@@ -415,6 +453,13 @@ float4 PSMain(VSOut i) : SV_Target
                         game.RenderWidth > 0 ? game.RenderWidth : width,
                         game.RenderHeight > 0 ? game.RenderHeight : height),
                     Flags2 = new Vector4(uiRectCount, MathF.Max(panel.Brightness, 0f), 0f, 0f),
+                    Grade = new Vector4(
+                        MathF.Max(panel.Contrast, 0f),
+                        MathF.Max(panel.Saturation, 0f),
+                        Math.Clamp(panel.EdgeSoftness, 0f, 0.5f),
+                        panel.ClipOutside ? 1f : 0f),
+                    Tint = new Vector4(panel.Tint, 0f),
+                    Uv = new Vector4(panel.UvScale, 0f, 0f),
                 };
 
                 // ⭐ Only shade the pixels this panel can possibly cover. The pass is a

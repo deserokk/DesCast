@@ -55,6 +55,49 @@ public class ScreenPlacement
     /// <summary>0 = invisible, 1 = solid. Multiplies the whole panel.</summary>
     public float Opacity { get; set; } = 1.0f;
 
+    /// <summary>How a picture is mapped onto a panel that is not the same shape.</summary>
+    public enum Fitting
+    {
+        /// <summary>Distort to fill the panel exactly. ⚠ Almost never what anyone wants.</summary>
+        Stretch,
+
+        /// <summary>Keep the shape and crop the overflow. ⭐ The right default.</summary>
+        Fill,
+
+        /// <summary>Keep the shape and leave the rest empty.</summary>
+        Letterbox,
+    }
+
+    /// <summary>
+    /// What to do when the picture and the panel are different shapes.
+    ///
+    /// ⭐ Matters most for a fixed-size fixture — an in-game picture frame you are filling,
+    /// or a notice board whose dimensions are part of the furniture. With
+    /// <see cref="FitToImage"/> on, the panel takes the picture's shape and this never
+    /// comes up; with it off, this decides between a distorted picture and a cropped one.
+    /// </summary>
+    public Fitting Fit { get; set; } = Fitting.Fill;
+
+    /// <summary>Contrast. 1 leaves it alone; below flattens, above hardens.</summary>
+    public float Contrast { get; set; } = 1.0f;
+
+    /// <summary>Colour strength. 1 is unchanged, 0 is greyscale.</summary>
+    public float Saturation { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Multiplied into the picture's colour. ⭐ Warm for lamplight, cold for a hologram.
+    /// </summary>
+    public Vector3 Tint { get; set; } = Vector3.One;
+
+    /// <summary>
+    /// Fades the outer edge of the panel, as a fraction of its size.
+    ///
+    /// ⭐ Small values do a lot. A hard-edged rectangle reads as a sticker pasted onto the
+    /// world; a few percent of softness is the cheapest thing available for making a screen
+    /// look placed rather than stuck on.
+    /// </summary>
+    public float EdgeSoftness { get; set; } = 0f;
+
     /// <summary>
     /// Scales the picture's colour. 1 leaves it alone, below 1 dims it, above 1 lifts it.
     ///

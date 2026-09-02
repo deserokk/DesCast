@@ -60,6 +60,15 @@ public sealed class ManifestScreen
 
     /// <summary>Colour multiplier; 1 leaves the picture alone.</summary>
     [JsonProperty("brightness")] public float Brightness { get; set; } = 1f;
+    [JsonProperty("contrast")] public float Contrast { get; set; } = 1f;
+    [JsonProperty("saturation")] public float Saturation { get; set; } = 1f;
+    [JsonProperty("edge")] public float EdgeSoftness { get; set; }
+
+    /// <summary>Colour multiplier as [r, g, b]; omit for none.</summary>
+    [JsonProperty("tint")] public float[]? Tint { get; set; }
+
+    /// <summary>"fill", "letterbox" or "stretch".</summary>
+    [JsonProperty("fitting")] public string Fitting { get; set; } = "fill";
 
     [JsonProperty("dwell")] public float Dwell { get; set; } = 15f;
 
@@ -87,6 +96,16 @@ public sealed class ManifestScreen
             FitToImage = Fit,
             Opacity = Opacity,
             Brightness = Brightness,
+            Contrast = Contrast,
+            Saturation = Saturation,
+            EdgeSoftness = EdgeSoftness,
+            Tint = Tint is { Length: >= 3 } t ? new Vector3(t[0], t[1], t[2]) : Vector3.One,
+            Fit = Fitting?.ToLowerInvariant() switch
+            {
+                "stretch" => ScreenPlacement.Fitting.Stretch,
+                "letterbox" => ScreenPlacement.Fitting.Letterbox,
+                _ => ScreenPlacement.Fitting.Fill,
+            },
             DwellSeconds = Dwell,
             Sources = Sources ?? new List<string>(),
             Enabled = true,
@@ -109,6 +128,11 @@ public sealed class ManifestScreen
         Fit = s.FitToImage,
         Opacity = s.Opacity,
         Brightness = s.Brightness,
+        Contrast = s.Contrast,
+        Saturation = s.Saturation,
+        EdgeSoftness = s.EdgeSoftness,
+        Tint = s.Tint == Vector3.One ? null : new[] { s.Tint.X, s.Tint.Y, s.Tint.Z },
+        Fitting = s.Fit.ToString().ToLowerInvariant(),
         Dwell = s.DwellSeconds,
         Sources = new List<string>(s.Sources),
     };

@@ -373,6 +373,26 @@ public sealed class PlacementWindow : Window
             if (ImGui.Button("1:1")) { s.Height = s.Width; dirty = true; }
         }
 
+        // ⭐ Only relevant when the panel is not taking the picture's shape — with fitting
+        // on, the two always match and the control would do nothing.
+        if (!s.FitToImage)
+        {
+            var fitting = (int)s.Fit;
+            ImGui.SetNextItemWidth(160f);
+            if (ImGui.Combo("Picture", ref fitting, "Stretch to fit Fill and crop Letterbox "))
+            {
+                s.Fit = (ScreenPlacement.Fitting)fitting;
+                dirty = true;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "What happens when the picture is a different shape to the panel.\n\n" +
+                    "Fill and crop keeps the picture undistorted and trims the overflow — " +
+                    "the right choice when you are filling a frame.\n" +
+                    "Letterbox keeps it whole and leaves the rest empty.\n" +
+                    "Stretch distorts it.");
+        }
+
         var brightness = s.Brightness;
         if (ImGui.SliderFloat("Brightness", ref brightness, 0.05f, 2f))
         {
@@ -389,6 +409,37 @@ public sealed class PlacementWindow : Window
         if (ImGui.SliderFloat("Opacity", ref opacity, 0f, 1f)) { s.Opacity = opacity; dirty = true; }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("How solid the panel is. Lower values let the room show through it.");
+
+        if (ImGui.CollapsingHeader("Adjust"))
+        {
+            var contrast = s.Contrast;
+            if (ImGui.SliderFloat("Contrast", ref contrast, 0f, 2f)) { s.Contrast = contrast; dirty = true; }
+
+            var saturation = s.Saturation;
+            if (ImGui.SliderFloat("Colour", ref saturation, 0f, 2f)) { s.Saturation = saturation; dirty = true; }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("0 is black and white.");
+
+            var tint = s.Tint;
+            if (ImGui.ColorEdit3("Tint", ref tint)) { s.Tint = tint; dirty = true; }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Multiplied into the picture. Warm for lamplight, cold for a hologram.");
+
+            var edge = s.EdgeSoftness;
+            if (ImGui.SliderFloat("Soft edge", ref edge, 0f, 0.5f)) { s.EdgeSoftness = edge; dirty = true; }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "Fades the outside of the panel.\n\nA hard edge reads as a sticker pasted " +
+                    "on the world; a few percent does more to make a screen look placed than " +
+                    "any of the colour controls.");
+
+            if (ImGui.Button("Reset adjustments"))
+            {
+                s.Brightness = s.Contrast = s.Saturation = 1f;
+                s.Tint = Vector3.One;
+                s.EdgeSoftness = 0f;
+                dirty = true;
+            }
+        }
 
         ImGui.Spacing();
         ImGui.TextDisabled("Showing");
