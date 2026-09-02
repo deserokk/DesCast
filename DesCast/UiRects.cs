@@ -31,8 +31,12 @@ namespace DesCast;
 /// </summary>
 internal static unsafe class UiRects
 {
-    /// <summary>Ceiling imposed by the shader's fixed-size constant buffer.</summary>
-    public const int Max = 32;
+    /// <summary>
+    /// Ceiling imposed by the shader's fixed-size constant buffer. ⚠ Raised for per-button
+    /// action bar rectangles — merging adjacent buttons into runs keeps the real count far
+    /// below this, but ten bars of twelve buttons is the worst case to survive.
+    /// </summary>
+    public const int Max = 64;
 
     /// <summary>
     /// HUD elements worth protecting indoors. ⚠ Deliberately short. Everything absent from
@@ -56,6 +60,73 @@ internal static unsafe class UiRects
     /// matched by prefix rather than listed. ⭐ Chris asked for the gauge specifically.
     /// </summary>
     private const string GaugePrefix = "JobHud";
+
+    private static bool IsActionBar(string name)
+        => name.StartsWith("_ActionBar", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Rectangles for the individual buttons of one action bar, with touching buttons
+    /// merged into a single run.
+    ///
+    /// ⭐ Merging matters twice over: a centred twelve-button row collapses to one
+    /// rectangle instead of twelve, and a bar split into clusters keeps the gaps between
+    /// them — which is exactly where Q keeps his job gauge.
+    ///
+    /// ⚠ Slots 9 to 20 of the node list are the twelve buttons. That is a hard-coded layout
+    /// detail taken from Pictomancy, and it is the kind of thing a patch can move — if
+    /// hotbars start being covered oddly, suspect these indices first.
+    /// </summary>
+    private static int CollectActionBarButtons(AtkUnitBase* unit, Span<Vector4> into)
+    {
+        const int firstSlot = 9, lastSlot = 20;
+        const float joinGap = 2f;   // buttons this close are treated as one run
+
+        var uld = &unit->UldManager;
+        if (uld->NodeList == null) return 0;
+
+        Span<Vector4> buttons = stackalloc Vector4[lastSlot - firstSlot + 1];
+        var found = 0;
+
+        for (var slot = firstSlot; slot <= lastSlot && slot < uld->NodeListCount; slot++)
+        {
+            var node = uld->NodeList[slot];
+            if (node == null || (node->NodeFlags & NodeFlags.Visible) == 0) continue;
+
+            var w = node->Width * unit->Scale;
+            var h = node->Height * unit->Scale;
+            if (w <= 0f || h <= 0f) continue;
+
+            buttons[found++] = new Vector4(
+                node->ScreenX, node->ScreenY, node->ScreenX + w, node->ScreenY + h);
+        }
+
+        // Merge any button that touches one already accumulated. Buttons arrive in slot
+        // order, which is layout order, so a single pass catches every run.
+        var count = 0;
+        for (var i = 0; i < found; i++)
+        {
+            var b = buttons[i];
+            var merged = false;
+
+            for (var j = 0; j < count; j++)
+            {
+                var e = into[j];
+                var overlaps = b.X <= e.Z + joinGap && b.Z >= e.X - joinGap
+                            && b.Y <= e.W + joinGap && b.W >= e.Y - joinGap;
+                if (!overlaps) continue;
+
+                into[j] = new Vector4(
+                    MathF.Min(e.X, b.X), MathF.Min(e.Y, b.Y),
+                    MathF.Max(e.Z, b.Z), MathF.Max(e.W, b.W));
+                merged = true;
+                break;
+            }
+
+            if (!merged && count < into.Length) into[count++] = b;
+        }
+
+        return count;
+    }
 
     public static int Collect(Span<Vector4> into, float viewportW, float viewportH)
     {
@@ -86,6 +157,17 @@ internal static unsafe class UiRects
                              || name.StartsWith(GaugePrefix, StringComparison.Ordinal)
                              || Array.IndexOf(Hud, name) >= 0;
                 if (!wanted) continue;
+
+                // ⭐⭐ Action bars get per-button treatment rather than one box round the
+                // whole bar. Chris and Q arrange theirs very differently — Q groups his
+                // buttons to one side and parks his job gauge in the gap he leaves — so a
+                // bar-shaped rectangle would cover the gauge sitting in the hole, and a
+                // good chunk of empty screen with it.
+                if (IsActionBar(name))
+                {
+                    count += CollectActionBarButtons(unit, into[count..]);
+                    continue;
+                }
 
                 float left = unit->X, top = unit->Y, w, h;
 
