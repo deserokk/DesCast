@@ -84,6 +84,29 @@ public sealed class PlacementWindow : Window
             }
         }
 
+        // ⭐⭐ Two different numbers, and they are worth showing together because people
+        // conflate them. The line above is video memory, which is released when you leave a
+        // room. This one is downloaded bytes on disk, which are kept precisely so that
+        // leaving is free — walking out for a duty and back costs nothing rather than the
+        // whole room again.
+        //
+        // ⚠ Disk is the resource nobody is short of and bandwidth is the one somebody is,
+        // so a large number on this line is the cache working, not a problem.
+        var cache = Plugin.Cache.Size();
+        if (cache.Files > 0)
+        {
+            ImGui.TextDisabled(
+                $"Saved downloads: {cache.Bytes / (1024.0 * 1024.0):N0} MB — {cache.Files} file(s)");
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Clear")) Plugin.Cache.Clear();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "Pictures already downloaded, kept so they are never fetched twice.\n\n" +
+                    "Clearing costs nothing but re-downloading them. There is no reason to\n" +
+                    "do it unless you want the disk space back.");
+        }
+
         ImGui.Separator();
 
         var enabled = cfg.Enabled;
@@ -363,7 +386,30 @@ public sealed class PlacementWindow : Window
         if (selected >= 0 && selected < cfg.Screens.Count)
         {
             ImGui.Separator();
+
+            // ⭐⭐ Editing is gated on build permission for the same reason placing is.
+            //
+            // Chris, 2026-09-02, on why this matters at all: the harm is not that somebody
+            // sees a screen in a room — only the person who subscribed sees it. It is that
+            // somebody walks into a room that is not theirs, covers it in whatever they
+            // like, and hands the file to their clique. That is an FC drama generator with
+            // no defence and no way for the victim to even know.
+            //
+            // ⚠ A lock, explicitly, not a wall. It stops someone trying door handles; it
+            // does not stop anyone willing to hand-edit the file, and it is not meant to.
+            // Chris: *"it will not prevent a determined lockpick, but it will prevent some
+            // random person testing the knobs."* Do not let that ceiling become an argument
+            // for skipping the lock — the knob-testers are the realistic case.
+            if (!canPlace)
+            {
+                ImGui.TextColored(new Vector4(1f, 0.75f, 0.35f, 1f),
+                    "You cannot build here, so screens here cannot be moved or changed.");
+                ImGui.BeginDisabled();
+            }
+
             DrawEditor(cfg.Screens[selected]);
+
+            if (!canPlace) ImGui.EndDisabled();
         }
     }
 
@@ -504,11 +550,14 @@ public sealed class PlacementWindow : Window
                     "sending you a picture for this board.");
         }
 
-        // ⭐ Only relevant when the panel is not taking the picture's shape — with fitting
-        // on, the two always match and the control would do nothing.
-        if (!s.FitToImage)
-        {
-            var thickness = s.Thickness;
+        // ⚠⚠ Depth used to sit inside an `if (!s.FitToImage)` block, so a panel taking
+        // its shape from the picture could not be given any thickness — and thickness is
+        // what turns a flat decal into a mounted object, which is the entire reason it
+        // was built. The two settings have nothing to do with each other: the block was
+        // misplaced, and the comment justifying it was written to fit the mistake rather
+        // than the code. The giveaway was a block body that was never indented.
+        // Reported by Chris, 2026-09-02.
+        var thickness = s.Thickness;
         if (ImGui.SliderFloat("Depth", ref thickness, 0f, 0.30f, "%.3f m"))
         {
             s.Thickness = thickness;
@@ -528,7 +577,12 @@ public sealed class PlacementWindow : Window
                 ImGui.SetTooltip("The sides. Dark reads as a frame; try a wood tone for a board.");
         }
 
-        var fitting = (int)s.Fit;
+        // ⭐ This one genuinely is fitting-dependent, so it stays gated: when the panel
+        // takes the picture’s shape the two always match, so stretch, fill and letterbox
+        // all give an identical result and the control would be a choice with no outcome.
+        if (!s.FitToImage)
+        {
+            var fitting = (int)s.Fit;
             ImGui.SetNextItemWidth(160f);
             if (ImGui.Combo("Picture", ref fitting, "Stretch to fit Fill and crop Letterbox "))
             {

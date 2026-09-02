@@ -4,6 +4,49 @@ All of this shipped on 2026-09-01, in one evening, with Bunny and Q testing live
 reasons matter more than the version numbers — most of these are bugs that only appear
 when a second person uses the thing.
 
+## 0.4.3
+
+**Pictures are released when you leave.** Nothing was ever released before this — the cache
+was documented as living for the whole session, which is right about not reloading a PNG
+every frame and wrong about never handing one back, so touring four rooms held four rooms.
+Chris found it from the memory readout: five pictures in the hall, seven after stepping into
+a room holding two.
+
+⭐ "Still wanted" means every slide a screen *could* show, not the one currently drawn — a
+five-picture album at thirty seconds a slide leaves any given picture untouched for two
+minutes, and the obvious signal would have evicted four of them on a permanent loop.
+
+**Downloads are cached on disk, so releasing them costs nothing.** Keyed by a hash of the
+URL, kept between sessions: a picture is fetched once, ever. Leaving for a duty and coming
+back now touches the network not at all.
+
+⭐ Past six hours it asks the server whether anything changed rather than asking for the
+file, so a check costs a couple of hundred bytes instead of a megabyte. Content stays
+current *and* nothing is re-downloaded — both, rather than a trade.
+
+⚠⚠ This matters to somebody specific rather than in the abstract: Q is on metered
+internet, so paying repeatedly for the same picture is a real cost to him and invisible to
+everyone else.
+
+**Album checks moved from five minutes to an hour, and `/descast refresh` was added.** The
+polling, not the pictures, was the ongoing cost — pictures are paid for once, a listing check
+repeats for as long as anybody stands in the room. An hour is acceptable *because* of the
+command: the automatic interval only has to cover "eventually", and wanting a new poster
+right now is somebody deciding to look, who can say so.
+
+**Two figures in the editor**, because they are easy to confuse: video memory held (released
+when you leave) and downloads saved (kept so that leaving is free). A large number on the
+second is the cache working.
+
+**Depth works on panels that fit their picture.** The slider sat inside an unrelated
+condition, so the one setting that makes a panel read as an object rather than a decal was
+missing for anyone using the default. The block was misplaced and the comment justifying it
+had been written to fit the mistake.
+
+**Screens cannot be moved where you cannot build.** Placing already required build
+permission; editing now does too. ⭐ Verified per *room*, not per plot — tested by the FC
+master standing in a member's private chamber on his own plot, where it correctly refuses.
+
 ## 0.4.2
 
 **Editing a manifest URL no longer throws.** The editor listed subscribed manifests by

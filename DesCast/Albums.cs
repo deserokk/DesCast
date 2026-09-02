@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -20,10 +20,18 @@ namespace DesCast;
 internal sealed class Albums
 {
     /// <summary>
-    /// ⚠ Slow on purpose. A new poster appearing within a few minutes is fine; the failure
-    /// this avoids is a room full of clients hammering an API on every slide change.
+    /// ⚠⚠ An hour, raised from five minutes on 2026-09-02, and the reason is somebody
+    /// specific: Q is on metered internet. Pictures are paid for once and then cached, but a
+    /// listing check repeats for as long as anyone stands in the room — so over an evening
+    /// the polling costs more than the pictures do. It is the ongoing cost, not the one-off,
+    /// that deserved the attention.
+    ///
+    /// ⭐ What makes an hour acceptable is <c>/descast refresh</c>. The automatic interval
+    /// only has to cover "eventually"; the case that actually wants immediacy — a poster
+    /// going up while people are stood there looking at the wall — is somebody deciding to
+    /// look, and they can say so. Chris' design.
     /// </summary>
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromHours(1);
 
     private sealed class Entry
     {
@@ -70,6 +78,15 @@ internal sealed class Albums
         }
 
         return entry.Images;
+    }
+
+    /// <summary>
+    /// Check every album again on the next frame. For <c>/descast refresh</c> — see the
+    /// interval above for why this exists rather than being unnecessary.
+    /// </summary>
+    public void RefreshNow()
+    {
+        foreach (var entry in cache.Values) entry.LastAttempt = DateTimeOffset.MinValue;
     }
 
     public string? ErrorFor(string albumUrl)

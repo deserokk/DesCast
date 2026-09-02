@@ -69,6 +69,12 @@ public sealed class Plugin : IDalamudPlugin
     internal Albums Albums { get; }
     internal CompanyBoard Board { get; }
 
+    /// <summary>
+    /// Downloaded bytes on disk. ⭐ Static because the fetch path is static, and there is
+    /// exactly one of these for the plugin.
+    /// </summary>
+    internal static DownloadCache Cache { get; private set; } = null!;
+
     private readonly WindowSystem windows = new("DesCast");
     private readonly PlacementWindow placementWindow;
 
@@ -95,6 +101,13 @@ public sealed class Plugin : IDalamudPlugin
 
         /// <summary>What a GIF gave up to fit its budget, so the editor can say so.</summary>
         public string? Note;
+
+        /// <summary>
+        /// When a screen in the room last had a use for this. ⚠ Not "when it was last
+        /// drawn" — a slideshow only draws one slide at a time, so drawing is far too
+        /// narrow a signal and would evict the other four mid-rotation.
+        /// </summary>
+        public DateTimeOffset LastWanted = DateTimeOffset.UtcNow;
     }
 
     private readonly Dictionary<string, ContentEntry> content = new();
@@ -232,6 +245,7 @@ public sealed class Plugin : IDalamudPlugin
         Renderer = new ScreenRenderer(Game);
         Manifest = new ManifestService(Config);
         Albums = new Albums();
+        Cache = new DownloadCache(PluginInterface.ConfigDirectory);
         Board = new CompanyBoard(Config);
 
         placementWindow = new PlacementWindow(this);
@@ -239,7 +253,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Commands.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the DesCast placement editor.",
+            HelpMessage = "Open the DesCast placement editor. /descast refresh checks for new pictures now.",
         });
 
         PluginInterface.UiBuilder.Draw += OnDraw;
@@ -269,6 +283,26 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     private void OnCommand(string command, string args)
     {
+        // ⭐⭐ This command is what buys the long polling interval. Checking an album every
+        // five minutes forever is a real cost to somebody on metered internet, and it exists
+        // only for the rare moment when a poster has just gone up. Making that moment a
+        // deliberate action lets the automatic interval be an hour instead — Chris,
+        // 2026-09-02: *"if something is posted and they want to see it quickly they can enter
+        // that command."*
+        if (args.Trim().Equals("refresh", StringComparison.OrdinalIgnoreCase))
+        {
+            Albums.RefreshNow();
+            Manifest.RefreshNow();
+
+            // ⚠ Drop the decoded pictures too. Without this, a replaced poster at the same
+            // URL keeps showing the old bytes — which is exactly the case somebody types
+            // this command for.
+            ForgetAllContent();
+
+            Chat.Print("DesCast: checking for new pictures.");
+            return;
+        }
+
         if (args.Trim().Equals("ui", StringComparison.OrdinalIgnoreCase))
         {
             var size = ImGui.GetMainViewport().Size;
@@ -339,6 +373,13 @@ public sealed class Plugin : IDalamudPlugin
         // and nobody wants it in a screenshot. Only the screens themselves ignore the hide.
         if (!GameGui.GameUiHidden) windows.Draw();
 
+        // ⚠⚠ Above every gate below, and that placement is the whole point. The rest of
+        // this method is skipped the moment you are not stood in a room with screens — which
+        // is precisely when the pictures from the last room should be handed back. Put the
+        // sweep after the gate and memory is only ever released while you are still looking
+        // at something, which is to say never.
+        SweepContent();
+
         if (!Config.Enabled) return;
         if (!ClientState.IsLoggedIn) return;
 
@@ -376,6 +417,13 @@ public sealed class Plugin : IDalamudPlugin
             // exactly as it does over a hand-written list — adding a poster to an album
             // lengthens the rotation for everyone with nothing else changing.
             var slides = ExpandSources(s);
+
+            // ⭐⭐ Every slide this screen could show counts as wanted, not just the one on
+            // the wall right now. A five-picture album at thirty seconds a slide leaves any
+            // given picture untouched for two minutes; treating "not currently drawn" as
+            // "not needed" would throw four of them away and re-download them on a loop.
+            foreach (var slide in slides) TouchContent(slide);
+
             var handle = GetContentHandle(SlideAt(slides, s, now, 0), out var imageAspect);
             if (handle == 0) continue;
 
@@ -849,7 +897,22 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private static async System.Threading.Tasks.Task<byte[]> FetchImageAsync(string url)
+    /// <summary>
+    /// A picture's bytes, from disk if we already have them.
+    ///
+    /// ⭐⭐ The cache is what makes releasing video memory free. Without it, leaving for a
+    /// duty and coming back re-downloads the whole room — which was true for about an hour
+    /// between the eviction sweep landing and this arriving.
+    /// </summary>
+    private static System.Threading.Tasks.Task<byte[]> FetchImageAsync(string url)
+        => Cache.GetAsync(url, (etag, lastModified) => DownloadImageAsync(url, etag, lastModified));
+
+    /// <summary>
+    /// The network half. Returns a null body to mean "the server says it has not changed",
+    /// which costs a few hundred bytes instead of the file.
+    /// </summary>
+    private static async System.Threading.Tasks.Task<(byte[]? Body, string? ETag, string? LastModified)>
+        DownloadImageAsync(string url, string? etag, string? lastModified)
     {
         var resolved = ResolveImageUrl(url);
 
@@ -858,8 +921,19 @@ public sealed class Plugin : IDalamudPlugin
         // Some CDNs, Imgur among them, serve differently or refuse outright without one.
         request.Headers.TryAddWithoutValidation("User-Agent", "DesCast/0.1 (FFXIV Dalamud plugin)");
 
+        // ⭐ Ask the server whether what we hold is still current, rather than asking for the
+        // file again. Both GitHub and Imgur's CDN answer these, and the answer is nearly
+        // always "unchanged" — a header instead of a megabyte.
+        if (!string.IsNullOrEmpty(etag))
+            request.Headers.TryAddWithoutValidation("If-None-Match", etag);
+        else if (!string.IsNullOrEmpty(lastModified))
+            request.Headers.TryAddWithoutValidation("If-Modified-Since", lastModified);
+
         using var response = await Http.SendAsync(
             request, System.Net.Http.HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
+            return (null, etag, lastModified);
 
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(
@@ -877,7 +951,9 @@ public sealed class Plugin : IDalamudPlugin
         if (bytes.LongLength > MaxImageBytes)
             throw new InvalidOperationException("Image exceeds the 32 MB limit.");
 
-        return bytes;
+        return (bytes,
+                response.Headers.ETag?.Tag,
+                response.Content.Headers.LastModified?.ToString("R"));
     }
 
     /// <summary>
@@ -892,6 +968,69 @@ public sealed class Plugin : IDalamudPlugin
 
         entry.Wrap?.Dispose();
         entry.Animation?.Dispose();
+    }
+
+    /// <summary>
+    /// Note that something in the current room still has a use for this picture. Only
+    /// stamps entries that already exist — wanting a picture is not the same as asking for
+    /// it, and loading is the draw path's job.
+    /// </summary>
+    private void TouchContent(string rawPath)
+    {
+        if (string.IsNullOrWhiteSpace(rawPath)) return;
+        if (content.TryGetValue(NormalisePath(rawPath), out var entry))
+            entry.LastWanted = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>How long a picture is kept after the last room that wanted it.</summary>
+    /// <remarks>
+    /// ⚠ Generous on purpose. Walking between the hall and a private room changes house id,
+    /// so a short window would throw a room's pictures away every time somebody stepped out
+    /// and back — turning a memory fix into a download loop, which is worse than the leak.
+    /// </remarks>
+    private static readonly TimeSpan ContentIdleTimeout = TimeSpan.FromMinutes(2);
+
+    private DateTimeOffset lastSweep = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// Release pictures no room has wanted for a while.
+    ///
+    /// ⚠⚠ Nothing was ever released before this existed. The cache was documented as living
+    /// for the life of the plugin, which is right about not reloading a PNG every frame and
+    /// wrong about never handing one back — so touring four rooms accumulated all four rooms.
+    /// Chris spotted it from the readout: five pictures in the hall, then seven on walking
+    /// into a room holding two. Reported 2026-09-02.
+    /// </summary>
+    private void SweepContent()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now - lastSweep < TimeSpan.FromSeconds(10)) return;
+        lastSweep = now;
+
+        List<string>? drop = null;
+
+        foreach (var (path, entry) in content)
+        {
+            // ⚠ Never evict a load in flight. Its task holds the entry and will write a
+            // texture into it; dropping the dictionary key would leak exactly the texture
+            // this method exists to reclaim.
+            if (entry.Loading) continue;
+
+            if (now - entry.LastWanted < ContentIdleTimeout) continue;
+
+            (drop ??= new List<string>()).Add(path);
+        }
+
+        if (drop == null) return;
+
+        foreach (var path in drop)
+        {
+            if (!content.Remove(path, out var entry)) continue;
+            entry.Wrap?.Dispose();
+            entry.Animation?.Dispose();
+        }
+
+        Log.Debug($"DesCast released {drop.Count} cached picture(s).");
     }
 
     /// <summary>
