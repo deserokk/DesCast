@@ -22,6 +22,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
     [PluginService] internal static IObjectTable Objects { get; private set; } = null!;
     [PluginService] internal static IDataManager Data { get; private set; } = null!;
+    [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
 
     private ulong locationLabelFor;
     private string? locationLabel;
@@ -148,6 +149,19 @@ public sealed class Plugin : IDalamudPlugin
         });
 
         PluginInterface.UiBuilder.Draw += OnDraw;
+
+        // ⚠⚠ Screens are drawn through ImGui, so Dalamud's plugin-UI hiding takes them
+        // with it — and hiding the UI is the *first* thing anyone does before taking a
+        // screenshot. A decorated house is largely for screenshots, so a screen that
+        // vanishes exactly when you want to photograph it is close to useless.
+        //
+        // These flags keep our draw callback running while the game UI is hidden, in
+        // cutscenes and in gpose. ⚠ They apply to the whole plugin, so OnDraw decides for
+        // itself what should still be visible — the panels yes, the editor window no.
+        PluginInterface.UiBuilder.DisableUserUiHide = true;
+        PluginInterface.UiBuilder.DisableAutomaticUiHide = true;
+        PluginInterface.UiBuilder.DisableCutsceneUiHide = true;
+        PluginInterface.UiBuilder.DisableGposeUiHide = true;
         PluginInterface.UiBuilder.OpenConfigUi += () => placementWindow.IsOpen = true;
         PluginInterface.UiBuilder.OpenMainUi += () => placementWindow.IsOpen = true;
 
@@ -201,7 +215,9 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     private void OnDraw()
     {
-        windows.Draw();
+        // The editor still hides with the rest of the interface — it is a settings window,
+        // and nobody wants it in a screenshot. Only the screens themselves ignore the hide.
+        if (!GameGui.GameUiHidden) windows.Draw();
 
         if (!Config.Enabled) return;
         if (!ClientState.IsLoggedIn) return;
