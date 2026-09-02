@@ -303,7 +303,8 @@ public sealed class Plugin : IDalamudPlugin
                 cam.Value,
                 System.Runtime.InteropServices.CollectionsMarshal.AsSpan(drawList),
                 Config.ReverseDepth,
-                Config.DisableOcclusion))
+                Config.DisableOcclusion,
+                Config.AvoidGameUi))
             return;
 
         var output = Renderer.OutputHandle;

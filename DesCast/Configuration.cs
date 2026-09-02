@@ -100,6 +100,16 @@ public class Configuration : IPluginConfiguration
     /// </summary>
     public bool DisableOcclusion { get; set; } = false;
 
+    /// <summary>
+    /// Keep screens from drawing over the game's own interface.
+    ///
+    /// ⚠ On by default, because a screen covering your hotbars is worse than a screen with
+    /// a rectangular bite out of it. A setting rather than a rule because the culling uses
+    /// bounding boxes, so it over-covers slightly — someone framing a screenshot may prefer
+    /// the picture intact and the interface hidden anyway.
+    /// </summary>
+    public bool AvoidGameUi { get; set; } = true;
+
     /// <summary>Show the placement editor on load. Off by default once things settle.</summary>
     public bool OpenOnLoad { get; set; } = true;
 

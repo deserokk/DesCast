@@ -71,7 +71,23 @@ public sealed class ScreenRenderer : IDisposable
         public Vector4 AxisX;    // xyz = half-width vector
         public Vector4 AxisY;    // xyz = half-height vector
         public Vector4 Flags;    // x reverseZ, y disableOcclusion, z depthW, w depthH
+        public Vector4 Flags2;   // x = number of interface rectangles in use
     }
+
+    /// <summary>
+    /// Params plus the interface rectangles, laid out as one constant buffer.
+    /// ⚠ Separate struct only because C# cannot put a fixed-size Vector4 array inside a
+    /// blittable struct without unsafe fixed buffers; the bytes are contiguous either way.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ParamsBlock
+    {
+        public Params Head;
+        public UiRectArray Rects;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Size = 16 * UiRects.Max)]
+    private struct UiRectArray { }
 
     private const string Hlsl = @"
 cbuffer Params : register(b0)
@@ -83,6 +99,8 @@ cbuffer Params : register(b0)
     float4 AxisX;
     float4 AxisY;
     float4 Flags;
+    float4 Flags2;
+    float4 UiRects[32];
 };
 
 Texture2D<float4> Content     : register(t0);
@@ -144,6 +162,17 @@ float4 PSMain(VSOut i) : SV_Target
         if (occluded) discard;
     }
 
+    // Do not paint over the game's own interface. Bounding boxes rather than outlines,
+    // so this bites a rectangle out of the picture — being able to read your hotbar is
+    // worth more than the corner of a poster.
+    int rectCount = (int)Flags2.x;
+    for (int r = 0; r < rectCount; r++)
+    {
+        float4 box = UiRects[r];
+        if (i.pos.x >= box.x && i.pos.x <= box.z && i.pos.y >= box.y && i.pos.y <= box.w)
+            discard;
+    }
+
     float2 uv = float2(u * 0.5 + 0.5, 0.5 - v * 0.5);
     float4 c = Content.SampleLevel(LinearClamp, uv, 0);
     c.a *= Center.w;
@@ -183,7 +212,7 @@ float4 PSMain(VSOut i) : SV_Target
             ps = dev.CreatePixelShader(psCode.Span);
 
             cb = dev.CreateBuffer(
-                (uint)Marshal.SizeOf<Params>(),
+                (uint)Marshal.SizeOf<ParamsBlock>(),
                 BindFlags.ConstantBuffer,
                 ResourceUsage.Dynamic,
                 CpuAccessFlags.Write);
@@ -329,13 +358,16 @@ float4 PSMain(VSOut i) : SV_Target
         int width, int height,
         GameView.CameraState cam,
         ReadOnlySpan<Panel> screens,
-        bool reverseDepth, bool disableOcclusion)
+        bool reverseDepth, bool disableOcclusion, bool avoidGameUi)
     {
         if (!Initialised || screens.Length == 0) return false;
         if (game.DepthSrv == null && !disableOcclusion) return false;
         if (!EnsureTarget(width, height)) return false;
 
         var ctx = game.Context!;
+
+        Span<Vector4> uiRects = stackalloc Vector4[UiRects.Max];
+        var uiRectCount = avoidGameUi ? UiRects.Collect(uiRects, width, height) : 0;
 
         // ⚠ Borrowing the game's context means putting back exactly what we found. Save
         // the bound render targets before touching anything.
@@ -377,6 +409,7 @@ float4 PSMain(VSOut i) : SV_Target
                         disableOcclusion ? 1f : 0f,
                         game.RenderWidth > 0 ? game.RenderWidth : width,
                         game.RenderHeight > 0 ? game.RenderHeight : height),
+                    Flags2 = new Vector4(uiRectCount, 0f, 0f, 0f),
                 };
 
                 // ⭐ Only shade the pixels this panel can possibly cover. The pass is a
@@ -391,7 +424,14 @@ float4 PSMain(VSOut i) : SV_Target
                 ctx.RSSetScissorRect(sx, sy, sw, sh);
 
                 var mapped = ctx.Map(cb!, MapMode.WriteDiscard);
-                unsafe { *(Params*)mapped.DataPointer = p; }
+                unsafe
+                {
+                    var dst = (byte*)mapped.DataPointer;
+                    *(Params*)dst = p;
+
+                    var rectDst = (Vector4*)(dst + Marshal.SizeOf<Params>());
+                    for (var r = 0; r < uiRectCount; r++) rectDst[r] = uiRects[r];
+                }
                 ctx.Unmap(cb!, 0);
 
                 Marshal.AddRef(panel.ContentSrv); // matched by the using-dispose below

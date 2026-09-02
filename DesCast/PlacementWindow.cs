@@ -67,6 +67,14 @@ public sealed class PlacementWindow : Window
                 "It selects which way round the game measures distance, and there are\n" +
                 "only two possible answers.");
 
+        var avoidUi = cfg.AvoidGameUi;
+        if (ImGui.Checkbox("Keep off the game interface", ref avoidUi)) { cfg.AvoidGameUi = avoidUi; cfg.Save(); }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "Stops screens drawing over your hotbars, chat and other windows.\n\n" +
+                "It uses each panel's rectangle, so it takes a slightly larger bite out " +
+                "of the picture than the panel itself. Turn it off for screenshots.");
+
         var noOcclude = cfg.DisableOcclusion;
         if (ImGui.Checkbox("Ignore walls (debug)", ref noOcclude)) { cfg.DisableOcclusion = noOcclude; cfg.Save(); }
         if (ImGui.IsItemHovered())
