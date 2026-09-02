@@ -47,22 +47,38 @@ internal static unsafe class UiRects
             for (var i = 0; i < units->Count && count < into.Length; i++)
             {
                 var unit = units->Entries[i].Value;
-                if (unit == null || !unit->IsVisible || unit->RootNode == null) continue;
+                if (unit == null || !unit->IsVisible || !unit->IsReady || unit->RootNode == null)
+                    continue;
 
-                var w = unit->RootNode->Width * unit->Scale;
-                var h = unit->RootNode->Height * unit->Scale;
+                // ⚠ A faded panel is still "visible" by the flag. Alpha is what says
+                // whether anything is actually on screen.
+                if (unit->Alpha == 0) continue;
+
+                // ⚠⚠ Ask the game for the window's bounds rather than measuring the root
+                // node. A root node is the addon's declared canvas and is routinely far
+                // larger than what it draws — the party list's is big enough to punch a
+                // hole most of the way across a screen, which is exactly what the first
+                // version did.
+                FFXIVClientStructs.FFXIV.Common.Math.Bounds bounds;
+                unit->GetWindowBounds(&bounds);
+
+                float left = bounds.Pos1.X, top = bounds.Pos1.Y;
+                float right = bounds.Pos2.X, bottom = bounds.Pos2.Y;
+
+                var w = right - left;
+                var h = bottom - top;
                 if (w <= 0f || h <= 0f) continue;
 
                 // ⚠ Skip anything effectively fullscreen. Several always-loaded addons are
                 // invisible containers the size of the screen, and culling against one of
                 // those would hide every screen in the house with no clue why.
-                if (w >= viewportW * 0.95f && h >= viewportH * 0.95f) continue;
+                if (w >= viewportW * 0.9f && h >= viewportH * 0.9f) continue;
 
-                // ⚠ And skip slivers. A one-pixel-tall panel is not something anyone is
+                // ⚠ And skip slivers. A few pixels of something is not what anyone is
                 // trying to read, and each rectangle costs shader work on every pixel.
-                if (w < 12f || h < 12f) continue;
+                if (w < 16f || h < 16f) continue;
 
-                into[count++] = new Vector4(unit->X, unit->Y, unit->X + w, unit->Y + h);
+                into[count++] = new Vector4(left, top, right, bottom);
             }
         }
         catch
