@@ -132,7 +132,7 @@ public sealed class Plugin : IDalamudPlugin
         // draw. ⚠ The editor reads Sources directly, so migrating only when a screen
         // happens to be rendered would show an empty list to anyone who opened the window
         // from somewhere else — a config that looks lost when it is merely stale.
-        var migratedAtLoad = false;
+        var migratedAtLoad = Config.MigrateManifestUrls();
         foreach (var s in Config.Screens) migratedAtLoad |= s.MigrateSources();
         if (migratedAtLoad) Config.Save();
 

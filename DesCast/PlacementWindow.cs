@@ -77,39 +77,66 @@ public sealed class PlacementWindow : Window
 
         ImGui.Separator();
 
-        // ── Shared room ───────────────────────────────────────────────────────────────
-        var url = cfg.ManifestUrl;
-        ImGui.SetNextItemWidth(300f);
-        if (ImGui.InputText("Shared screens", ref url, 512))
+        // ── Shared rooms ──────────────────────────────────────────────────────────────
+        // ⭐ A list, not one. The FC hall is published by officers; a private room belongs
+        // to whoever lives in it. Subscribing to several keeps both without either party
+        // needing edit rights over the other's file.
+        ImGui.TextDisabled("Shared rooms");
+
+        var removeUrl = -1;
+        var i2 = 0;
+        foreach (var (surl, count, serr, loadedAt, fetching) in plugin.Manifest.Status())
         {
-            cfg.ManifestUrl = url.Trim();
+            ImGui.PushID(1000 + i2);
+
+            var editable = surl;
+            ImGui.SetNextItemWidth(300f);
+            if (ImGui.InputText("##murl", ref editable, 512))
+            {
+                cfg.ManifestUrls[i2] = editable.Trim();
+                cfg.Save();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("x")) removeUrl = i2;
+
+            if (fetching)
+                ImGui.TextDisabled("   checking...");
+            else if (loadedAt is { } at)
+                ImGui.TextDisabled($"   {count} screen(s), updated {(int)(DateTimeOffset.UtcNow - at).TotalMinutes} min ago");
+
+            // ⚠ Fail visibly. An unreachable file means shared screens go blank, and a
+            // blank wall is indistinguishable from an empty room.
+            if (serr is not null)
+                ImGui.TextColored(new Vector4(1f, 0.5f, 0.45f, 1f), $"   {serr}");
+
+            ImGui.PopID();
+            i2++;
+        }
+
+        if (removeUrl >= 0 && removeUrl < cfg.ManifestUrls.Count)
+        {
+            cfg.ManifestUrls.RemoveAt(removeUrl);
+            cfg.Save();
+        }
+
+        if (ImGui.Button("Subscribe to a room"))
+        {
+            cfg.ManifestUrls.Add(string.Empty);
             cfg.Save();
         }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(
-                "A link to a file listing screens everyone should see.\n\n" +
-                "Everyone pointed at the same link sees the same room — and it stays " +
-                "there whether or not the person who placed it is online.\n\n" +
-                "Leave blank to use only your own screens.");
+                "A link to a file listing screens. Everyone pointed at the same link sees " +
+                "the same room, and it stays there whether or not whoever placed it is " +
+                "online.\n\nSubscribe to several: the company hall from your officers, and " +
+                "each private room from whoever lives in it.");
 
-        if (!string.IsNullOrWhiteSpace(cfg.ManifestUrl))
+        if (cfg.ManifestUrls.Count > 0)
         {
             ImGui.SameLine();
-            if (ImGui.Button("Refresh")) plugin.Manifest.RefreshNow();
-
-            if (plugin.Manifest.IsFetching)
-                ImGui.TextDisabled("   Fetching…");
-            else if (plugin.Manifest.LoadedAt is { } at)
-                ImGui.TextDisabled($"   {plugin.Manifest.Screens.Count} shared screen(s), " +
-                                   $"updated {(int)(DateTimeOffset.UtcNow - at).TotalMinutes} min ago");
-
-            // ⚠ Fail visibly. An unreachable manifest means every shared screen in the FC
-            // goes blank at once, and a blank wall is indistinguishable from an empty room.
-            if (plugin.Manifest.Error is { } merr)
-                ImGui.TextColored(new Vector4(1f, 0.5f, 0.45f, 1f), $"   {merr}");
+            if (ImGui.Button("Refresh all")) plugin.Manifest.RefreshNow();
         }
-
-        ImGui.Separator();
 
         // ── Placing ───────────────────────────────────────────────────────────────────
         var canPlace = location is not null && plugin.Game.CanPlaceHere();

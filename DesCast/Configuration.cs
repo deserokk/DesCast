@@ -29,12 +29,38 @@ public class Configuration : IPluginConfiguration
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// URL of the shared room definition — a JSON file listing screens and what they show.
-    /// ⭐ This is what makes screens exist for other people: everyone pointed at the same
-    /// URL sees the same room, with no player needing to be online for it to be there.
-    /// Empty means local screens only.
+    /// ⚠ Legacy single-manifest field, superseded by <see cref="ManifestUrls"/>. Kept only
+    /// so an existing subscription migrates instead of silently dropping.
     /// </summary>
     public string ManifestUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Shared room definitions to subscribe to. ⭐⭐ A list rather than one, because a house
+    /// is not one shared space: the Free Company hall is published by officers, while each
+    /// private room belongs to whoever lives in it. Subscribing to several and merging them
+    /// lets both exist without anyone needing edit rights over the other.
+    ///
+    /// ⭐ Entries are scoped by house id, which includes the room number, so a manifest can
+    /// only place screens in rooms its own entries name — the FC hall file cannot put
+    /// anything in someone's bedroom.
+    ///
+    /// ⚠⚠ ObjectCreationHandling.Replace, or Newtonsoft appends to the initialiser on every
+    /// load and the list grows by its own length forever.
+    /// </summary>
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<string> ManifestUrls { get; set; } = new();
+
+    /// <summary>
+    /// Fold a single-manifest config into the list. ⭐ A migration, not a default — a
+    /// changed initialiser cannot reach a config that already exists.
+    /// </summary>
+    public bool MigrateManifestUrls()
+    {
+        if (ManifestUrls.Count > 0 || string.IsNullOrWhiteSpace(ManifestUrl)) return false;
+        ManifestUrls.Add(ManifestUrl.Trim());
+        ManifestUrl = string.Empty;
+        return true;
+    }
 
     /// <summary>
     /// ⚠ Whether the game's depth buffer uses reverse-Z (near = 1.0, far = 0.0).
