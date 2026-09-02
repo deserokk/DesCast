@@ -101,24 +101,31 @@ internal sealed unsafe class CompanyBoard
         lastSeenRaw = raw;
 
         var found = Parse(raw);
-        if (found.Count == 0)
+
+        // ⚠ Seen-with-nothing-in-it is a real state, distinct from never seen — the
+        // difference between "it will arrive at login" and "your officers have not put a
+        // link up", which are different problems for the person reading the window.
+        var seenChanged = config.CompanyBoardSeenAt is null;
+        config.CompanyBoardSeenAt = DateTimeOffset.UtcNow;
+
+        if (SameAsStored(found))
         {
-            // ⚠ Seen but with nothing in it is a real state, distinct from never seen — it
-            // is the difference between "open your FC window" and "your officers have not
-            // put a link on the board yet", which are different problems for the user.
-            config.CompanyBoardSeenAt = DateTimeOffset.UtcNow;
-            config.Save();
+            if (seenChanged) config.Save();
             return;
         }
 
-        if (SameAsStored(found)) return;
+        // ⚠⚠ An empty result must clear what was stored, not be ignored. Otherwise
+        // deleting the line from the board does nothing — an officer can publish screens
+        // to the whole company but never withdraw them, and every member keeps showing
+        // whatever was last on the wall with no way to stop it.
+        var removed = config.CompanyBoardUrls.Count > 0 && found.Count == 0;
 
         config.CompanyBoardUrls = found;
-        config.CompanyBoardSeenAt = DateTimeOffset.UtcNow;
         config.Save();
 
-        Plugin.Log.Information(
-            $"Company board: picked up {found.Count} screen link(s).");
+        Plugin.Log.Information(removed
+            ? "Company board: the screen link was removed; company screens cleared."
+            : $"Company board: picked up {found.Count} screen link(s).");
     }
 
     /// <summary>
