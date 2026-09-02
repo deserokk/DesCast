@@ -93,9 +93,7 @@ public sealed class PlacementWindow : Window
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(
                 "Only needed to use Imgur albums. Register one free at " +
-                "imgur.com/oauth2/addclient (choose \"anonymous usage without a callback\").
-
-" +
+                "imgur.com/oauth2/addclient (choose \"anonymous usage without a callback\").\n\n" +
                 "It is not a password: it identifies the app, not you, and only reads public " +
                 "content. Everyone can use the same one.");
 
