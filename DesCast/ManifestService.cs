@@ -48,6 +48,17 @@ public sealed class ManifestService
 
     public ManifestService(Configuration config) => this.config = config;
 
+    /// <summary>
+    /// Everything subscribed to: the user's own list plus whatever the Free Company board
+    /// published. ⭐ Two sources, one merge point, so nothing downstream has to care which
+    /// a screen came from.
+    /// </summary>
+    private IEnumerable<string> AllUrls()
+    {
+        foreach (var u in config.CompanyBoardUrls) yield return u;
+        foreach (var u in config.ManifestUrls) yield return u;
+    }
+
     /// <summary>Per-subscription state, for the editor to show. Never throws, never blocks.</summary>
     public IEnumerable<(string Url, int Count, string? Error, DateTimeOffset? LoadedAt, bool Fetching)> Status()
     {
@@ -70,11 +81,11 @@ public sealed class ManifestService
         var changed = false;
         var wanted = new HashSet<string>();
 
-        foreach (var raw in config.ManifestUrls)
+        foreach (var raw in AllUrls())
         {
             var url = raw.Trim();
             if (url.Length == 0) continue;
-            wanted.Add(url);
+            if (!wanted.Add(url)) continue;   // the same link on the board and in your list is one subscription
 
             if (!subscriptions.TryGetValue(url, out var sub))
             {

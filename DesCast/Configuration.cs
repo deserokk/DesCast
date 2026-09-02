@@ -51,6 +51,26 @@ public class Configuration : IPluginConfiguration
     public List<string> ManifestUrls { get; set; } = new();
 
     /// <summary>
+    /// Screen links found on the Free Company board, cached.
+    ///
+    /// ⭐ Kept separate from <see cref="ManifestUrls"/> rather than merged into it. The
+    /// board's list belongs to the officers and is replaced wholesale whenever the board
+    /// changes; the user's own list is theirs. Merging would mean a board edit silently
+    /// deleting somebody's private-room subscription.
+    ///
+    /// ⚠ Cached deliberately, because the board is only readable after the Free Company
+    /// window has been opened — so this must survive the session that read it.
+    /// </summary>
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<string> CompanyBoardUrls { get; set; } = new();
+
+    /// <summary>
+    /// When the board was last read. Null means never — which is a different message to
+    /// the user than "read it, and there was nothing on it".
+    /// </summary>
+    public DateTimeOffset? CompanyBoardSeenAt { get; set; }
+
+    /// <summary>
     /// Fold a single-manifest config into the list. ⭐ A migration, not a default — a
     /// changed initialiser cannot reach a config that already exists.
     /// </summary>

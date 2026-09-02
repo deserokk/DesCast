@@ -83,6 +83,32 @@ public sealed class PlacementWindow : Window
         // needing edit rights over the other's file.
         ImGui.TextDisabled("Shared rooms");
 
+        // ── From the Free Company board ───────────────────────────────────────────────
+        // ⚠ Three states, and they are three different problems for the user: never read
+        // it, read it and found nothing, read it and found links. Collapsing them into
+        // "no screens" would leave someone with no idea which one they are in.
+        if (cfg.CompanyBoardSeenAt is null)
+        {
+            ImGui.TextColored(new Vector4(0.65f, 0.8f, 1f, 1f),
+                "Open your Free Company window once to pick up your company's screens.");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "The game only hands the board text to plugins after that window has " +
+                    "been opened. It is remembered afterwards, so this is a one-time thing.");
+        }
+        else if (cfg.CompanyBoardUrls.Count == 0)
+        {
+            ImGui.TextDisabled("Company board: read, but no screen links on it.");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("An officer can add a line like:  Screens: 0GzA4vpc");
+        }
+        else
+        {
+            foreach (var boardUrl in cfg.CompanyBoardUrls)
+                ImGui.TextDisabled($"   {boardUrl}   (from your company board)");
+        }
+
+
         var removeUrl = -1;
         var i2 = 0;
         foreach (var (surl, count, serr, loadedAt, fetching) in plugin.Manifest.Status())
@@ -205,6 +231,7 @@ public sealed class PlacementWindow : Window
         }
         if (shared > 0 && ImGui.IsItemHovered())
             ImGui.SetTooltip("From the shared file. Edit that file to change these.");
+
 
         if (selected >= 0 && selected < cfg.Screens.Count)
         {

@@ -23,6 +23,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IObjectTable Objects { get; private set; } = null!;
     [PluginService] internal static IDataManager Data { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
+    [PluginService] internal static IChatGui Chat { get; private set; } = null!;
 
     private ulong locationLabelFor;
     private string? locationLabel;
@@ -65,6 +66,7 @@ public sealed class Plugin : IDalamudPlugin
     internal GameView Game { get; }
     internal ScreenRenderer Renderer { get; }
     internal ManifestService Manifest { get; }
+    internal CompanyBoard Board { get; }
 
     private readonly WindowSystem windows = new("DesCast");
     private readonly PlacementWindow placementWindow;
@@ -139,6 +141,7 @@ public sealed class Plugin : IDalamudPlugin
         Game = new GameView();
         Renderer = new ScreenRenderer(Game);
         Manifest = new ManifestService(Config);
+        Board = new CompanyBoard(Config);
 
         placementWindow = new PlacementWindow(this);
         windows.AddWindow(placementWindow);
@@ -168,7 +171,15 @@ public sealed class Plugin : IDalamudPlugin
         if (Config.OpenOnLoad) placementWindow.IsOpen = true;
     }
 
-    private void OnCommand(string command, string args) => placementWindow.Toggle();
+    /// <summary>
+    /// ⭐ The probe gets command access as well as buttons, because testing it means having
+    /// the game's own Free Company window open — which is exactly when hunting for a button
+    /// in another window is most awkward.
+    /// </summary>
+    private void OnCommand(string command, string args)
+    {
+        placementWindow.Toggle();
+    }
 
     /// <summary>
     /// Cheap enough to run every frame: a location read and a walk of a list that has
@@ -222,6 +233,7 @@ public sealed class Plugin : IDalamudPlugin
         if (!Config.Enabled) return;
         if (!ClientState.IsLoggedIn) return;
 
+        Board.Tick();
         Manifest.Tick();
 
         // ⚠ Outside a house we draw nothing at all. A screen belongs to a specific ward,
@@ -422,6 +434,25 @@ public sealed class Plugin : IDalamudPlugin
         return Newtonsoft.Json.JsonConvert.SerializeObject(manifest, Newtonsoft.Json.Formatting.Indented);
     }
 
+    /// <summary>
+    /// Whether this looks like a bare Pastebin id: exactly eight letters and digits, with
+    /// at least one digit and one letter so ordinary words are not mistaken for one.
+    /// </summary>
+    internal static bool IsPasteId(string s)
+    {
+        if (s.Length != 8) return false;
+
+        var hasDigit = false;
+        var hasLetter = false;
+        foreach (var c in s)
+        {
+            if (char.IsAsciiDigit(c)) hasDigit = true;
+            else if (char.IsAsciiLetter(c)) hasLetter = true;
+            else return false;
+        }
+        return hasDigit && hasLetter;
+    }
+
     /// <summary>Fetch a text document — the manifest. Same client, same limits.</summary>
     internal static async System.Threading.Tasks.Task<string> FetchTextAsync(string url)
     {
@@ -458,6 +489,24 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     internal static string ResolveTextUrl(string url)
     {
+        url = url.Trim();
+
+        // A bare paste id expands to the full raw address. Two reasons, both Chris':
+        //
+        // Length — the Company Board is three short pages, and "0GzA4vpc" costs eight
+        // characters where the full address costs thirty-three. Several rooms then fit
+        // where one barely did.
+        //
+        // Deniability — the board is read by every member, including people on a vanilla
+        // client, and it lives on Square's servers. A bare token is not obviously
+        // anything; a raw pastebin link is obviously machine-readable configuration. Same
+        // instinct as tagging the line "Screens:" rather than naming the plugin.
+        //
+        // ⚠ Pastebin ids are exactly eight alphanumerics — a tight enough shape to
+        // recognise without swallowing text that was meant to be something else. A gist
+        // still needs its full address, because its id alone does not identify the file.
+        if (IsPasteId(url)) return $"https://pastebin.com/raw/{url}";
+
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return url;
 
         var host = uri.Host.ToLowerInvariant();
