@@ -62,6 +62,36 @@ internal sealed class AnimatedImage : IDisposable
     private const int MaxFrames = 300;
 
     /// <summary>
+    /// ⭐⭐ A GIF is held to half the resolution a still picture is, and that is a
+    /// perceptual argument rather than a budget one: <b>motion hides detail.</b> Nobody
+    /// examines a frame that is on screen for a twentieth of a second, which is why every
+    /// video format on earth spends fewer bits on the moving parts of a picture. Detail
+    /// that would be marginal on a still is wasted several hundred times over here.
+    ///
+    /// ⚠ Floored, because a GIF is also the one thing likely to be small already — halving
+    /// a 200-pixel reaction gif would be visible where halving a 600-pixel one is not.
+    /// </summary>
+    private const int MinEdge = 320;
+
+    /// <summary>
+    /// ⭐⭐ Frames per second we keep. <b>This, not resolution, is where a GIF's memory
+    /// actually goes</b> — they are small pictures and a great many of them, so the cap that
+    /// matters is on the count.
+    ///
+    /// The delay field is in hundredths of a second and a large share of real GIFs are
+    /// written at 2, which is fifty frames a second: faster than most animation is drawn,
+    /// faster than many monitors, and well past what the eye resolves as motion. Keeping
+    /// twenty throws away frames nobody perceived while the animation runs at exactly the
+    /// same speed — the resolution argument applied to time instead of space, and usually
+    /// the larger saving of the two.
+    ///
+    /// ⚠ Frames are merged, never dropped: consecutive ones are combined until their
+    /// delays add up to a frame's worth. A GIF that holds on its punchline keeps the pause
+    /// as one long frame instead of forty identical ones.
+    /// </summary>
+    private const int MinFrameMs = 50;
+
+    /// <summary>
     /// ⚠ How soft we are willing to let a GIF get before dropping frames instead.
     /// Shrinking is the better trade a long way down — a slightly soft GIF still reads as
     /// the thing it is, while one missing every third frame reads as broken — but past
@@ -96,12 +126,11 @@ internal sealed class AnimatedImage : IDisposable
         // Size first, frames second — see MinScale.
         var (w0, h0) = (image.Width, image.Height);
 
-        // ⭐ The same resolution cap stills get, applied before the budget rather than
-        // instead of it. A short GIF at 2000 pixels across fits the byte budget comfortably
-        // and is still several times more detail than a wall panel can show.
+        // Half the cap a still gets, floored — see MinEdge.
         var scale = 1f;
         var longest = Math.Max(w0, h0);
-        if (maxEdge > 0 && longest > maxEdge) scale = maxEdge / (float)longest;
+        var gifEdge = maxEdge > 0 ? Math.Max(maxEdge / 2, MinEdge) : 0;
+        if (gifEdge > 0 && longest > gifEdge) scale = gifEdge / (float)longest;
 
         var capped = scale;
         while (scale > MinScale * capped && FrameCost(w0, h0, scale) * count > budgetBytes)
@@ -111,8 +140,15 @@ internal sealed class AnimatedImage : IDisposable
         var h = Math.Max(1, (int)(h0 * scale));
         var perFrame = (long)w * h * 4;
 
+        // ⭐ Merge frames that run faster than we keep. This happens before any budget
+        // arithmetic because it is not a compromise — a 50fps GIF held to 20 loses frames
+        // nobody saw, at exactly the same playback speed.
+        var merged = MergeToFrameRate(delays);
+
+        // Only now, if it is still too much, thin what is left. That part is a compromise,
+        // and the part worth telling the user about.
         var affordable = (int)Math.Max(2, budgetBytes / perFrame);
-        var keep = Math.Min(count, Math.Min(affordable, MaxFrames));
+        var keep = Math.Min(merged.Count, Math.Min(affordable, MaxFrames));
 
         var result = new AnimatedImage { Aspect = h0 > 0 ? (float)w0 / h0 : 0f };
 
@@ -138,14 +174,14 @@ internal sealed class AnimatedImage : IDisposable
                 // summed into it, so dropping frames changes the smoothness and never the
                 // duration — which is what keeps the wall clock honest and everyone in
                 // the room on the same frame.
-                var from = (int)((long)k * count / keep);
-                var to = (int)((long)(k + 1) * count / keep);
+                var from = (int)((long)k * merged.Count / keep);
+                var to = (int)((long)(k + 1) * merged.Count / keep);
                 if (to <= from) to = from + 1;
 
                 var span = 0;
-                for (var s = from; s < to && s < count; s++) span += delays[s];
+                for (var s = from; s < to && s < merged.Count; s++) span += merged[s].Ms;
 
-                image.SelectActiveFrame(dim, from);
+                image.SelectActiveFrame(dim, merged[from].Index);
                 g.Clear(Color.Transparent);
                 g.DrawImage(image, new Rectangle(0, 0, w, h));
 
@@ -170,15 +206,51 @@ internal sealed class AnimatedImage : IDisposable
         // picture in the plugin and saying so on each one would be noise.
         var squeezed = scale < capped * 0.999f;
 
-        result.Compromise = (squeezed, keep < count) switch
+        result.Compromise = (squeezed, keep < merged.Count) switch
         {
-            (true, true) => $"Shrunk to {scale / capped:P0} and reduced to {keep} of {count} frames to fit the memory budget.",
+            (true, true) => $"Shrunk to {scale / capped:P0} and reduced to {keep} of {merged.Count} frames to fit the memory budget.",
             (true, false) => $"Shrunk to {scale / capped:P0} to fit the memory budget.",
-            (false, true) => $"Reduced to {keep} of {count} frames to fit the memory budget.",
+            (false, true) => $"Reduced to {keep} of {merged.Count} frames to fit the memory budget.",
             _ => null,
         };
 
         return result;
+    }
+
+    /// <summary>A source frame we are keeping, and how long it is on screen for.</summary>
+    private readonly record struct Kept(int Index, int Ms);
+
+    /// <summary>
+    /// Combine consecutive frames that run faster than <see cref="MinFrameMs"/>.
+    ///
+    /// ⚠⚠ The total duration is preserved exactly — a merged frame carries the sum of the
+    /// delays it stands for. That is not tidiness: the wall clock is the only thing keeping
+    /// two people on the same frame of the same GIF, so a loop running even slightly short
+    /// on one machine would drift a room apart over a few minutes.
+    ///
+    /// ⚠ A trailing run shorter than a full frame is still emitted rather than discarded,
+    /// because discarding it would shorten the loop — see above.
+    /// </summary>
+    private static List<Kept> MergeToFrameRate(int[] delays)
+    {
+        var kept = new List<Kept>(delays.Length);
+
+        var start = 0;
+        var accumulated = 0;
+
+        for (var i = 0; i < delays.Length; i++)
+        {
+            accumulated += delays[i];
+            if (accumulated < MinFrameMs && i < delays.Length - 1) continue;
+
+            kept.Add(new Kept(start, accumulated));
+            start = i + 1;
+            accumulated = 0;
+        }
+
+        if (kept.Count == 0) kept.Add(new Kept(0, 100));
+
+        return kept;
     }
 
     private static long FrameCost(int w, int h, float scale)

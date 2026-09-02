@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -29,12 +29,18 @@ internal static class ImageDecode
     /// <summary>
     /// Longest edge we will keep, by default.
     ///
-    /// ⭐ 2048 is deliberately generous: a screen filling half a 4K display is around 2000
-    /// pixels across, so this is "as much detail as the biggest reasonable case can show"
-    /// rather than a compromise. It costs about 9 MB for a 16:9 picture rather than the
-    /// 24 MB a modern phone photo arrives at.
+    /// ⭐⭐ 1536, about 5 MB a picture, chosen against the weakest machine that will run
+    /// this rather than the machine it was written on. Chris compared his own boards at
+    /// every setting down to 1024 and could not tell them apart — so the higher default
+    /// was buying detail nobody looks at, charged to the guest least able to pay it, who
+    /// is also the person who will never go and change a setting.
+    ///
+    /// ⚠ The generous options stay, and that is half the decision rather than a
+    /// leftover: someone with a wall-sized panel viewed up close on a 4K monitor has a
+    /// real reason to want 4096, and taking that away would be the mirror of the mistake
+    /// this default avoids.
     /// </summary>
-    public const int DefaultMaxEdge = 2048;
+    public const int DefaultMaxEdge = 1536;
 
     /// <summary>
     /// Decode and shrink, or return null to say "let Dalamud handle this one".

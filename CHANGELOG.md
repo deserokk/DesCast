@@ -4,6 +4,38 @@ All of this shipped on 2026-09-01, in one evening, with Bunny and Q testing live
 reasons matter more than the version numbers — most of these are bugs that only appear
 when a second person uses the thing.
 
+## 0.4.1
+
+**GIFs cost roughly a tenth of what they did**, from two changes that give up nothing
+anyone can see.
+
+**Frames are merged to about twenty a second.** This, not resolution, is where a GIF's
+memory goes — they are small pictures and a great many of them. The delay field is in
+hundredths of a second and a large share of real GIFs are written at 2, which is fifty
+frames a second: faster than most animation is drawn, faster than many monitors, and past
+what the eye resolves as motion. A 50fps meme drops from 100 frames to 34 and plays at
+exactly the same speed. A GIF already at 10fps is left completely alone.
+
+⚠⚠ Frames are merged rather than dropped, and the total duration is preserved to the
+millisecond. That is load-bearing rather than tidy: the wall clock is the only thing
+keeping two people on the same frame, so a loop running even slightly short on one machine
+would drift a room apart over a few minutes. Verified against six timing shapes, including
+a GIF that holds on its punchline — that pause survives as one long frame instead of forty
+identical ones.
+
+**GIFs are held to half the resolution stills are** (floored at 320px). Motion hides
+detail: nobody examines a frame that is on screen for a twentieth of a second, which is why
+every video format spends fewer bits on the moving parts of a picture.
+
+**Picture detail now defaults to Medium** (1536px, about 5 MB a picture) rather than High.
+Chris compared his own boards at every setting down to 1024 and could not tell them apart,
+so the higher default was buying detail nobody looks at — charged to the guest least able
+to afford it, who is also the person least likely to go and change a setting. Every option
+above it stays; that is half the decision rather than a leftover.
+
+⚠ Only affects people who have never touched the setting. An existing choice is not
+overwritten.
+
 ## 0.4.0
 
 **Animated GIFs.** Frames are decoded once and held as textures, and which one shows is
