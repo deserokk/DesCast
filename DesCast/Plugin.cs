@@ -77,6 +77,21 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly WindowSystem windows = new("DesCast");
     private readonly PlacementWindow placementWindow;
+    private readonly BuildWindow buildWindow;
+    private readonly SettingsWindow settingsWindow;
+
+    internal bool SettingsWindowOpen
+    {
+        get => settingsWindow.IsOpen;
+        set => settingsWindow.IsOpen = value;
+    }
+
+    /// <summary>Whether the arranging panel is showing. Set by its button and by layout mode.</summary>
+    internal bool BuildWindowOpen
+    {
+        get => buildWindow.IsOpen;
+        set => buildWindow.IsOpen = value;
+    }
 
     /// <summary>
     /// One entry per image path we have been asked for. Holds the loaded texture, or the
@@ -249,7 +264,11 @@ public sealed class Plugin : IDalamudPlugin
         Board = new CompanyBoard(Config);
 
         placementWindow = new PlacementWindow(this);
+        buildWindow = new BuildWindow(this);
+        settingsWindow = new SettingsWindow(this);
         windows.AddWindow(placementWindow);
+        windows.AddWindow(buildWindow);
+        windows.AddWindow(settingsWindow);
 
         Commands.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -270,7 +289,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.DisableAutomaticUiHide = true;
         PluginInterface.UiBuilder.DisableCutsceneUiHide = true;
         PluginInterface.UiBuilder.DisableGposeUiHide = true;
-        PluginInterface.UiBuilder.OpenConfigUi += () => placementWindow.IsOpen = true;
+        PluginInterface.UiBuilder.OpenConfigUi += () => settingsWindow.IsOpen = true;
         PluginInterface.UiBuilder.OpenMainUi += () => placementWindow.IsOpen = true;
 
         // ⚠⚠ The editor does not open by itself, ever. It used to, behind a config flag
@@ -345,6 +364,13 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>
+    /// Whether anything at all puts a screen in this house. ⭐ Used by the room list to
+    /// decide whether to say "Here" — a room counts as here when it actually contributes a
+    /// screen, not when its code happens to be in the list, or every room would claim to be.
+    /// </summary>
+    internal bool AnyScreensFrom(GameView.HouseLocation location) => AnyScreensHere(location);
+
+    /// <summary>
     /// Everything that should be on a wall in this room: the user's own screens plus
     /// whatever the shared manifest puts here. ⭐ Both are the same type, so nothing
     /// downstream — sizing, slideshow timing, the renderer — knows or cares which is which.
@@ -386,6 +412,8 @@ public sealed class Plugin : IDalamudPlugin
         // sweep after the gate and memory is only ever released while you are still looking
         // at something, which is to say never.
         SweepContent();
+
+        FollowLayoutMode();
 
         if (!Config.Enabled) return;
         if (!ClientState.IsLoggedIn) return;
@@ -484,7 +512,13 @@ public sealed class Plugin : IDalamudPlugin
                 (int)size.X, (int)size.Y,
                 cam.Value,
                 System.Runtime.InteropServices.CollectionsMarshal.AsSpan(drawList),
-                Config.ReverseDepth,
+                // ⚠⚠ Constant, not a setting. It was a toggle so the game's depth convention
+                // could be established in one click rather than guessed at here — and it has
+                // been: true. The other value is not a different-hardware case, it is simply
+                // wrong, and it inverts the test so panels appear *only* where a wall blocks
+                // them. Chris demonstrated it with a screenshot, 2026-09-02. A setting whose
+                // second position is never correct is not a setting.
+                reverseDepth: true,
                 Config.DisableOcclusion,
 
                 // ⭐⭐ Nothing to keep off when there is no interface on screen. Hiding the
@@ -1011,6 +1045,56 @@ public sealed class Plugin : IDalamudPlugin
 
         entry.Wrap?.Dispose();
         entry.Animation?.Dispose();
+    }
+
+    /// <summary>
+    /// ⭐⭐ Candidate names for the game's own furnishing-layout interface. Screens are
+    /// furniture, so the moment somebody is arranging furniture is exactly the moment they
+    /// might arrange a screen — and it is a mode they already know, so nobody learns a
+    /// "DesCast placement mode".
+    ///
+    /// ⚠⚠ <b>Unverified list.</b> These names are a reasonable guess, not a reading. Run
+    /// <c>/descast ui</c> while in layout mode and correct them from the dump — that is what
+    /// it is for. Nothing depends on getting this right: the button in the main window is the
+    /// guaranteed way in, and a wrong name here simply means the panel does not appear on
+    /// its own.
+    /// </summary>
+    private static readonly string[] LayoutAddons =
+    {
+        "HousingLayout", "HousingGoods", "HousingFurniture",
+        "HousingSelectBlock", "HousingEditInterior", "HousingEditExterior",
+    };
+
+    private bool buildOpenedByLayout;
+
+    /// <summary>
+    /// Open the arranging panel while the game's layout mode is up, and close it again
+    /// after — but only if we were the one who opened it. ⚠ Somebody who opened the panel
+    /// deliberately must not have it shut in their face when they leave layout mode.
+    /// </summary>
+    private void FollowLayoutMode()
+    {
+        var inLayout = false;
+        foreach (var name in LayoutAddons)
+        {
+            // ⚠ Dalamud hands back a wrapper here, not a raw pointer — ask it rather than
+            // casting.
+            var addon = GameGui.GetAddonByName(name, 1);
+            if (addon.Address == nint.Zero || !addon.IsVisible) continue;
+            inLayout = true;
+            break;
+        }
+
+        if (inLayout && !BuildWindowOpen && Game.CanPlaceHere())
+        {
+            BuildWindowOpen = true;
+            buildOpenedByLayout = true;
+        }
+        else if (!inLayout && buildOpenedByLayout)
+        {
+            BuildWindowOpen = false;
+            buildOpenedByLayout = false;
+        }
     }
 
     /// <summary>

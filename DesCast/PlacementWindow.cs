@@ -1,21 +1,42 @@
 ﻿using System;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Components;
 using Dalamud.Interface.Windowing;
 
 namespace DesCast;
 
 /// <summary>
-/// The placement editor. ⭐ For now this is the actual product: before there is anything
-/// worth showing on a screen, the useful thing is being able to stand in a room, drop a
-/// panel where a TV might go, and walk around it to see whether the sightlines work.
-/// It is a house-design instrument first and a settings window second.
+/// The everyday window: which rooms you follow, and the handful of settings anybody
+/// actually changes.
+///
+/// ⭐⭐ Modelled deliberately on a Mare client (Snowcloak), because that is a shape every
+/// FFXIV player already holds in their head. Chris' framing is "Mare for Media", and the
+/// point of borrowing wholesale is that it costs the least technical person **zero new
+/// concepts** — a featured code at the top, a list of things you follow, a pause and a menu
+/// on each row. She is not learning our interface, she is applying one she has.
+///
+/// ⚠ Everything about placing or editing a screen lives in <see cref="BuildWindow"/>.
+/// Nothing here should grow geometry, or the split stops meaning anything.
 /// </summary>
 public sealed class PlacementWindow : Window
 {
     private readonly Plugin plugin;
-    private int selected = -1;
     private DateTimeOffset copiedAt = DateTimeOffset.MinValue;
+    private string copiedWhat = string.Empty;
+
+    private bool addingRoom;
+    private int newRoomKind;
+    private string newRoomCode = string.Empty;
+
+    /// <summary>What is typed into the paste box at the top.</summary>
+    private string addBuffer = string.Empty;
+
+    /// <summary>Row whose rename box is open, or empty.</summary>
+    private string renaming = string.Empty;
+    private string renameBuffer = string.Empty;
 
     public PlacementWindow(Plugin plugin)
         : base("DesCast##descast-main")
@@ -23,8 +44,8 @@ public sealed class PlacementWindow : Window
         this.plugin = plugin;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(380, 320),
-            MaximumSize = new Vector2(900, 1400),
+            MinimumSize = new Vector2(360, 300),
+            MaximumSize = new Vector2(800, 1200),
         };
     }
 
@@ -32,808 +53,490 @@ public sealed class PlacementWindow : Window
     {
         var cfg = plugin.Config;
 
-        // ── Status. Everything that can silently stop a screen appearing says so here,
-        //    because a blank wall is indistinguishable from "nothing placed yet". ──
-        var location = plugin.Game.GetLocation();
-        if (location is null)
+        DrawFeaturedCode();
+        DrawMyRooms();
+        ImGui.Spacing();
+        DrawRoomList();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        DrawFooter();
+    }
+
+    // ── The code you hand people ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// ⭐⭐⭐ The Free Company's code, featured, and it costs nobody any setup: the game
+    /// announces the company board in chat at login and we read it from there. Install, log
+    /// in, and here is the thing you give a visiting friend.
+    ///
+    /// ⚠ Three states, and they are three different problems for the reader: never read the
+    /// board, read it and found nothing, read it and found a code. Collapsing them into "no
+    /// screens" leaves somebody with no idea which one they are in.
+    /// </summary>
+    private void DrawFeaturedCode()
+    {
+        var cfg = plugin.Config;
+
+        if (cfg.CompanyBoardUrls.Count == 0)
         {
-            ImGui.TextColored(new Vector4(1f, 0.75f, 0.35f, 1f),
-                "Not inside a house. Screens only render indoors.");
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.65f, 0.8f, 1f, 1f));
+            ImGui.TextWrapped(cfg.CompanyBoardSeenAt is null
+                ? "Your company's rooms arrive next time you log in."
+                : "Your company has not put a room code on its board yet.");
+            ImGui.PopStyleColor();
+
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(cfg.CompanyBoardSeenAt is null
+                    ? "The game announces the company board in chat when you log in, and it\n" +
+                      "is read from there. Opening your Free Company window once also does it."
+                    : "An officer can add a line to the company board like:\n\n    Screens: 0GzA4vpc");
+            return;
         }
-        else
+
+        foreach (var code in cfg.CompanyBoardUrls)
         {
-            var loc = location.Value;
-            ImGui.Text(plugin.DescribeLocation(loc));
-            if (!plugin.Game.CanPlaceHere())
-                ImGui.TextColored(new Vector4(1f, 0.75f, 0.35f, 1f),
-                    "No build permission here — you can view, but not place.");
-        }
+            var label = cfg.NameFor(code);
+            if (label.Length == 0) label = "Your company";
 
-        if (plugin.Game.Error is { } gerr)
-            ErrorText(gerr);
-        if (plugin.Renderer.Error is { } rerr)
-            ErrorText(rerr);
-
-        // ⭐⭐ The running memory total, and the one place it can usefully appear. Whoever
-        // decorates the room never experiences the cost of overdoing it — they loaded it
-        // all gradually on the machine that could afford it. The guest who walks in later
-        // does, and has no idea why. This is the only moment at which the person who can
-        // act on the number is the person looking at it.
-        var mem = plugin.ContentMemory;
-        if (mem.Bytes > 0)
-        {
-            var mb = mem.Bytes / (1024.0 * 1024.0);
-            var what = mem.Animations > 0
-                ? $"{mem.Images} image(s) and {mem.Animations} GIF(s)"
-                : $"{mem.Images} image(s)";
-
-            if (mem.Bytes >= Plugin.MemoryWarnBytes)
+            Centred(label, 1.55f, TitleColour);
+            if (Centred(code, 1.25f, CodeColour, asButton: true))
             {
-                ImGui.TextColored(new Vector4(1f, 0.75f, 0.35f, 1f),
-                    $"Loaded content: {mb:N0} MB — {what}. That is a lot to ask of a guest.");
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip(
-                        "Every screen in view holds its picture in video memory, and a GIF\n" +
-                        "holds every frame of it at once. Nothing here is broken — but a\n" +
-                        "visitor on weaker hardware pays this before they see the room.\n\n" +
-                        "Fewer GIFs, or shorter ones, is the cheapest thing to give up.");
+                ImGui.SetClipboardText(code);
+                Copied("code");
             }
-            else
-            {
-                ImGui.TextDisabled($"Loaded content: {mb:N0} MB — {what}");
-            }
-        }
 
-        // ⭐⭐ Two different numbers, and they are worth showing together because people
-        // conflate them. The line above is video memory, which is released when you leave a
-        // room. This one is downloaded bytes on disk, which are kept precisely so that
-        // leaving is free — walking out for a duty and back costs nothing rather than the
-        // whole room again.
-        //
-        // ⚠ Disk is the resource nobody is short of and bandwidth is the one somebody is,
-        // so a large number on this line is the cache working, not a problem.
-        var cache = Plugin.Cache.Size();
-        if (cache.Files > 0)
-        {
-            ImGui.TextDisabled(
-                $"Saved downloads: {cache.Bytes / (1024.0 * 1024.0):N0} MB — {cache.Files} file(s)");
-
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Clear")) Plugin.Cache.Clear();
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(
-                    "Pictures already downloaded, kept so they are never fetched twice.\n\n" +
-                    "Clearing costs nothing but re-downloading them. There is no reason to\n" +
-                    "do it unless you want the disk space back.");
+                    "Click to copy.\n\nGive this to anyone you want to see your company's\n" +
+                    "screens — they paste it into their own DesCast and that is all.");
+        }
+    }
+
+    /// <summary>
+    /// The user's own rooms, sitting with the company's rather than among the rooms they
+    /// follow — because these are the codes they *hand out*, and that is a different job from
+    /// the codes they were handed.
+    /// </summary>
+    private void DrawMyRooms()
+    {
+        var cfg = plugin.Config;
+
+        var removeAt = -1;
+        for (var i = 0; i < cfg.MyRooms.Count; i++)
+        {
+            var room = cfg.MyRooms[i];
+            ImGui.PushID(3000 + i);
+
+            var name = cfg.NameFor(room.Code);
+            if (name.Length == 0) name = room.Label;
+
+            // ⭐ A step smaller than the company's, so there is one obvious primary rather
+            // than a stack of equally loud headings.
+            Centred(name, 1.25f, TitleColour);
+            if (Centred(room.Code, 1.1f, CodeColour, asButton: true))
+            {
+                ImGui.SetClipboardText(room.Code);
+                Copied("code");
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Click to copy.\n\nRight-click for more.");
+
+            // ⚠⚠ A menu, not an immediate delete. Right-click sat on the same small
+            // target as left-click, and what it would have thrown away is quite possibly
+            // the only record anywhere of that room’s code — we cannot regenerate it and
+            // neither can the user. One extra click is the right price for that.
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) ImGui.OpenPopup("my-room-menu");
+
+            if (ImGui.BeginPopup("my-room-menu"))
+            {
+                if (ImGui.MenuItem("Copy code")) { ImGui.SetClipboardText(room.Code); Copied("code"); }
+                if (ImGui.MenuItem("Give it a name"))
+                {
+                    renaming = room.Code;
+                    renameBuffer = cfg.NameFor(room.Code);
+                }
+                ImGui.Separator();
+                if (ImGui.MenuItem("Forget this room")) removeAt = i;
+                ImGui.EndPopup();
+            }
+
+            if (renaming == room.Code)
+            {
+                ImGui.SetNextItemWidth(180f);
+                ImGui.SetKeyboardFocusHere();
+                if (ImGui.InputText("##myrename", ref renameBuffer, 64,
+                                    ImGuiInputTextFlags.EnterReturnsTrue))
+                {
+                    var typed = renameBuffer.Trim();
+                    if (typed.Length == 0) cfg.RoomNames.Remove(room.Code);
+                    else cfg.RoomNames[room.Code] = typed;
+                    cfg.Save();
+                    renaming = string.Empty;
+                }
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Cancel")) renaming = string.Empty;
+            }
+
+            ImGui.PopID();
         }
 
-        ImGui.Separator();
-
-        var enabled = cfg.Enabled;
-        if (ImGui.Checkbox("Enabled", ref enabled)) { cfg.Enabled = enabled; cfg.Save(); }
-
-        var reverse = cfg.ReverseDepth;
-        if (ImGui.Checkbox("Reverse depth", ref reverse)) { cfg.ReverseDepth = reverse; cfg.Save(); }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "If screens show through walls, or never appear at all, flip this.\n" +
-                "It selects which way round the game measures distance, and there are\n" +
-                "only two possible answers.");
-
-        // ⭐ Picture detail, expressed as what it costs rather than as a number of pixels.
-        // "2048" means nothing to anyone; "about 9 MB a picture" is the decision actually
-        // being made, and it is the only setting here that moves the total above.
-        var edges = new[] { 0, 4096, 2048, 1536, 1024 };
-        var edgeLabels = new[]
+        if (removeAt >= 0)
         {
-            "Original size (whatever the file is)",
-            "Very high — 4096px, about 35 MB a picture",
-            "High — 2048px, about 9 MB a picture",
-            "Medium — 1536px, about 5 MB a picture",
-            "Low — 1024px, about 2 MB a picture",
-        };
-
-        var edgeIndex = Array.IndexOf(edges, cfg.MaxImageEdge);
-        if (edgeIndex < 0) edgeIndex = 2;
-
-        ImGui.SetNextItemWidth(360f);
-        if (ImGui.Combo("Picture detail", ref edgeIndex, edgeLabels, edgeLabels.Length))
-        {
-            cfg.MaxImageEdge = edges[edgeIndex];
+            cfg.MyRooms.RemoveAt(removeAt);
             cfg.Save();
-            plugin.ForgetAllContent();
         }
 
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "How much of a picture is kept once it reaches the graphics card.\n\n" +
-                "⚠ The file format makes no difference to this. A JPEG and a PNG of the\n" +
-                "same photograph cost exactly the same once decoded — compression is\n" +
-                "undone before the card ever sees it. Size is the only lever.\n\n" +
-                "A screen on a wall covers perhaps a thousand pixels of your monitor, so\n" +
-                "a six-megapixel photo is carrying detail that cannot reach anyone's eye.\n" +
-                "High is already generous. Changing this reloads every picture.");
-
-        var avoidUi = cfg.AvoidGameUi;
-        if (ImGui.Checkbox("Keep off the game interface", ref avoidUi)) { cfg.AvoidGameUi = avoidUi; cfg.Save(); }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "Stops screens drawing over your hotbars, chat and other windows.\n\n" +
-                "It uses each panel's rectangle, so it takes a slightly larger bite out " +
-                "of the picture than the panel itself. Turn it off for screenshots.");
-
-        var noOcclude = cfg.DisableOcclusion;
-        if (ImGui.Checkbox("Ignore walls (debug)", ref noOcclude)) { cfg.DisableOcclusion = noOcclude; cfg.Save(); }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "Draws the panel over everything, ignoring what is in front of it.\n" +
-                "If a screen appears with this on and vanishes with it off, the panel\n" +
-                "is in the right place and only the wall test is wrong.");
-
-        ImGui.Separator();
-
-        // ── Shared rooms ──────────────────────────────────────────────────────────────
-        // ⭐ A list, not one. The FC hall is published by officers; a private room belongs
-        // to whoever lives in it. Subscribing to several keeps both without either party
-        // needing edit rights over the other's file.
-        ImGui.TextDisabled("Shared rooms");
-
-        // ── From the Free Company board ───────────────────────────────────────────────
-        // ⚠ Three states, and they are three different problems for the user: never read
-        // it, read it and found nothing, read it and found links. Collapsing them into
-        // "no screens" would leave someone with no idea which one they are in.
-        if (cfg.CompanyBoardSeenAt is null)
+        // ⭐ Adding one is deliberately tucked away: it is a once-per-room act by somebody
+        // who has just published, not something a participant ever needs to find.
+        if (!addingRoom)
         {
-            ImGui.TextColored(new Vector4(0.65f, 0.8f, 1f, 1f),
-                "Your company's screens arrive next time you log in.");
+            if (ImGui.SmallButton("+ one of my rooms")) addingRoom = true;
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(
-                    "The game announces the company board in chat at login, and it is read " +
-                    "from there.\n\nIf you would rather not wait, opening your Free Company " +
-                    "window once also does it. Either way it is remembered afterwards.");
-        }
-        else if (cfg.CompanyBoardUrls.Count == 0)
-        {
-            ImGui.TextDisabled("Company board: read, but no screen links on it.");
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("An officer can add a line like:  Screens: 0GzA4vpc");
-        }
-        else
-        {
-            foreach (var boardUrl in cfg.CompanyBoardUrls)
-                ImGui.TextDisabled($"   {boardUrl}   (from your company board)");
+                    "After you publish a room, paste its code here so you have\n" +
+                    "something to hand people. Nothing is checked — it only decides\n" +
+                    "whether the code sits up here or down in the list.");
+            return;
         }
 
+        ImGui.SetNextItemWidth(150f);
+        ImGui.Combo("##kind", ref newRoomKind, OwnRoom.Kinds, OwnRoom.Kinds.Length);
 
-        var removeUrl = -1;
-        var i2 = 0;
-        foreach (var (surl, count, serr, loadedAt, fetching) in plugin.Manifest.Status())
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(130f);
+        var submitted = ImGui.InputTextWithHint(
+            "##mycode", "room code", ref newRoomCode, 512, ImGuiInputTextFlags.EnterReturnsTrue);
+
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButton(FontAwesomeIcon.Check)) submitted = true;
+
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButton(FontAwesomeIcon.Times))
         {
-            ImGui.PushID(1000 + i2);
+            addingRoom = false;
+            newRoomCode = string.Empty;
+        }
 
-            var editable = surl;
-            ImGui.SetNextItemWidth(300f);
-            if (ImGui.InputText("##murl", ref editable, 512))
+        if (!submitted) return;
+
+        var code = Plugin.CollapseToCode(newRoomCode);
+        if (code.Length > 0)
+        {
+            cfg.MyRooms.Add(new OwnRoom { Kind = newRoomKind, Code = code });
+            cfg.Save();
+        }
+
+        addingRoom = false;
+        newRoomCode = string.Empty;
+    }
+
+    // ── Rooms you follow ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// ⭐ Grouped "Here" and "Elsewhere" rather than online/offline. A Mare client can group
+    /// by presence because it has a server and identities; we have neither and need neither,
+    /// since a room works whether or not anybody is home. What matters to somebody holding
+    /// this window open is which of these they are standing in.
+    /// </summary>
+    private void DrawRoomList()
+    {
+        var cfg = plugin.Config;
+        var here = plugin.Game.GetLocation();
+
+        // ⭐⭐ A box you paste into, not a button that makes an empty row to fill in.
+        // Snowcloak's shape, and the difference matters: somebody has just been handed a
+        // code in a tell and wants to use it. "Add" then "type here" is the same work in a
+        // worse order, and it leaves a blank row behind if they change their mind.
+        var addWidth = ImGui.GetContentRegionAvail().X - ImGui.GetFrameHeight()
+                       - ImGui.GetStyle().ItemSpacing.X;
+
+        ImGui.SetNextItemWidth(MathF.Max(120f, addWidth));
+        var submitted = ImGui.InputTextWithHint(
+            "##add", "paste a room code", ref addBuffer, 512,
+            ImGuiInputTextFlags.EnterReturnsTrue);
+
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButton(FontAwesomeIcon.Plus)) submitted = true;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "An eight-character code for a room — like a Mare code.\n\n" +
+                "Everyone using the same one sees the same room, and it stays there\n" +
+                "whether or not whoever placed it is online.\n\n" +
+                "Paste the whole link if that is what you were given; it will be\n" +
+                "shortened to the code for you.");
+
+        if (submitted)
+        {
+            var code = Plugin.CollapseToCode(addBuffer);
+
+            // ⚠ Silently ignore a duplicate rather than adding a second row for the same
+            // room. Pasting the code you already have is a normal mistake, not an error
+            // worth a message.
+            if (code.Length > 0 && !cfg.ManifestUrls.Contains(code, StringComparer.OrdinalIgnoreCase))
             {
-                cfg.ManifestUrls[i2] = Plugin.CollapseToCode(editable);
+                cfg.ManifestUrls.Add(code);
                 cfg.Save();
             }
 
-            ImGui.SameLine();
-            if (ImGui.Button("x")) removeUrl = i2;
+            addBuffer = string.Empty;
+        }
 
-            if (fetching)
-                ImGui.TextDisabled("   checking...");
-            else if (loadedAt is { } at)
-                ImGui.TextDisabled($"   {count} screen(s), updated {(int)(DateTimeOffset.UtcNow - at).TotalMinutes} min ago");
+        ImGui.Spacing();
 
-            // ⚠ Fail visibly. An unreachable file means shared screens go blank, and a
-            // blank wall is indistinguishable from an empty room.
-            if (serr is not null)
-                ErrorText(serr, 12f);
+        var status = plugin.Manifest.Status();
+        if (status.Count == 0 && cfg.CompanyBoardUrls.Count == 0)
+        {
+            ImGui.TextDisabled("No rooms yet.");
+            return;
+        }
+
+        // ⚠ A room counts as "here" when it actually puts a screen in this house, not when
+        // its code happens to be selected — otherwise every room claims to be here.
+        var anyHere = here is not null && plugin.AnyScreensFrom(here.Value);
+
+        if (anyHere)
+        {
+            ImGui.TextDisabled("Here");
+            ImGui.Indent(8f);
+            ImGui.TextUnformatted(plugin.DescribeLocation(here!.Value));
+            ImGui.Unindent(8f);
+            ImGui.Spacing();
+        }
+
+        ImGui.TextDisabled(anyHere ? "Rooms you follow" : "Rooms");
+
+        var removeAt = -1;
+        for (var i = 0; i < status.Count; i++)
+        {
+            var row = status[i];
+            ImGui.PushID(1000 + i);
+
+            if (DrawRoomRow(i, row.Url, row.Count, row.Error, row.LoadedAt, row.Fetching))
+                removeAt = i;
 
             ImGui.PopID();
-            i2++;
         }
 
-        if (removeUrl >= 0 && removeUrl < cfg.ManifestUrls.Count)
+        if (removeAt >= 0 && removeAt < cfg.ManifestUrls.Count)
         {
-            cfg.ManifestUrls.RemoveAt(removeUrl);
+            cfg.ManifestUrls.RemoveAt(removeAt);
             cfg.Save();
         }
 
-        if (ImGui.Button("Add a room code"))
-        {
-            cfg.ManifestUrls.Add(string.Empty);
-            cfg.Save();
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "An eight-character code for a room \u2014 like a Mare code. Everyone using the " +
-                "same one sees the same room, and it stays there whether or not whoever " +
-                "placed it is online.\n\nPaste the whole link if that is what you were " +
-                "given; it will be shortened to the code for you.\n\nAdd several: the " +
-                "company hall from your officers, and each private room from whoever " +
-                "lives in it.");
-
-        if (cfg.ManifestUrls.Count > 0)
-        {
-            ImGui.SameLine();
-            if (ImGui.Button("Refresh all")) plugin.Manifest.RefreshNow();
-        }
-
-        // Rooms reached through a company file's include list, shown separately so it is
+        // Rooms reached through a company file's include list. Listed separately so it is
         // obvious where a screen came from — and so a member's broken file reads as theirs
         // rather than as the company's.
         var inc = 0;
         foreach (var (iurl, icount, ierr) in plugin.Manifest.IncludedStatus())
         {
-            if (inc++ == 0) ImGui.TextDisabled("Rooms listed by those files:");
-            ImGui.TextDisabled($"   {Shorten(iurl)}  —  {icount} screen(s)");
-            if (ierr is not null)
-                ErrorText(ierr, 20f);
-        }
-
-        if (ImGui.CollapsingHeader("Build a company file"))
-        {
-            ImGui.TextWrapped(
-                "List each member's own room file here. They keep editing theirs; you only " +
-                "own who is on the list. Removing someone is deleting a line and republishing.");
-
-            var removeAt = -1;
-            for (var i = 0; i < cfg.BuilderEntries.Count; i++)
+            if (inc++ == 0)
             {
-                ImGui.PushID(2000 + i);
-                var entry = cfg.BuilderEntries[i];
-                ImGui.SetNextItemWidth(300f);
-                if (ImGui.InputText("##be", ref entry, 512))
-                {
-                    cfg.BuilderEntries[i] = Plugin.CollapseToCode(entry);
-                    cfg.Save();
-                }
-                ImGui.SameLine();
-                if (ImGui.Button("x")) removeAt = i;
-                ImGui.PopID();
+                ImGui.Spacing();
+                ImGui.TextDisabled("Listed by those rooms");
             }
 
-            if (removeAt >= 0) { cfg.BuilderEntries.RemoveAt(removeAt); cfg.Save(); }
-
-            if (ImGui.Button("Add a room file")) { cfg.BuilderEntries.Add(string.Empty); cfg.Save(); }
-
-            if (cfg.BuilderEntries.Count > 0)
-            {
-                ImGui.SameLine();
-                if (ImGui.Button("Copy company file"))
-                {
-                    ImGui.SetClipboardText(plugin.BuildCompanyManifest(cfg.BuilderEntries));
-                    copiedAt = DateTimeOffset.UtcNow;
-                }
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip(
-                        "Paste this into the file your company board points at.\n\n" +
-                        "It contains links, not copies — so a member changing their own room " +
-                        "shows up for everyone without you touching this again.");
-            }
-        }
-
-        // ── Placing ───────────────────────────────────────────────────────────────────
-        var canPlace = location is not null && plugin.Game.CanPlaceHere();
-        if (!canPlace) ImGui.BeginDisabled();
-        if (ImGui.Button("Place a screen in front of me"))
-            PlaceInFrontOfPlayer(location);
-        if (!canPlace) ImGui.EndDisabled();
-
-        ImGui.SameLine();
-        ImGui.TextDisabled("(?)");
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Drops a panel about two metres ahead at eye height, facing you.");
-
-        // ⭐ Authoring by placement, not by typing coordinates. Chris' idea: arrange the
-        // room in game, copy, paste into whatever hosts the file. Nobody should ever have
-        // to work out a world coordinate by hand.
-        var mine = cfg.Screens.FindAll(s => location is not null && location.Value.Matches(s));
-        if (mine.Count > 0)
-        {
-            ImGui.SameLine();
-            if (ImGui.Button($"Copy {mine.Count} screen(s) as shared file"))
-            {
-                var label = location is null ? string.Empty : plugin.DescribeLocation(location.Value);
-                ImGui.SetClipboardText(plugin.ExportManifest(mine, label));
-                copiedAt = DateTimeOffset.UtcNow;
-            }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(
-                    "Copies your screens in this house as the shared-room file.\n\n" +
-                    "Paste it into a gist or pastebin, then put that link in the " +
-                    "\"Shared screens\" box above — yours and everyone else's.");
-
-            if (DateTimeOffset.UtcNow - copiedAt < TimeSpan.FromSeconds(3))
-            {
-                ImGui.SameLine();
-                ImGui.TextColored(new Vector4(0.5f, 0.9f, 0.6f, 1f), "copied");
-            }
-        }
-
-        ImGui.Separator();
-
-        // ── The screens in this house ─────────────────────────────────────────────────
-        var any = false;
-        for (var i = 0; i < cfg.Screens.Count; i++)
-        {
-            var s = cfg.Screens[i];
-            if (location is not null && !location.Value.Matches(s)) continue;
-            any = true;
-
-            ImGui.PushID(i);
-            if (ImGui.Selectable($"{s.Name}##sel", selected == i)) selected = i;
-            ImGui.PopID();
-        }
-
-        if (!any) ImGui.TextDisabled("No screens of your own in this room.");
-
-        // Shared screens, listed but not editable — they belong to the file, and letting
-        // someone drag one here would produce a change that silently vanishes on the next
-        // refresh. Edit the file instead.
-        var shared = 0;
-        foreach (var s in plugin.Manifest.Screens)
-        {
-            if (location is null || !location.Value.Matches(s)) continue;
-            if (shared++ == 0) ImGui.TextDisabled("Shared:");
-            ImGui.TextDisabled($"   {s.Name}  ({s.Sources.Count} image(s))");
-        }
-        if (shared > 0 && ImGui.IsItemHovered())
-            ImGui.SetTooltip("From the shared file. Edit that file to change these.");
-
-
-        if (selected >= 0 && selected < cfg.Screens.Count)
-        {
-            ImGui.Separator();
-
-            // ⭐⭐ Editing is gated on build permission for the same reason placing is.
-            //
-            // Chris, 2026-09-02, on why this matters at all: the harm is not that somebody
-            // sees a screen in a room — only the person who subscribed sees it. It is that
-            // somebody walks into a room that is not theirs, covers it in whatever they
-            // like, and hands the file to their clique. That is an FC drama generator with
-            // no defence and no way for the victim to even know.
-            //
-            // ⚠ A lock, explicitly, not a wall. It stops someone trying door handles; it
-            // does not stop anyone willing to hand-edit the file, and it is not meant to.
-            // Chris: *"it will not prevent a determined lockpick, but it will prevent some
-            // random person testing the knobs."* Do not let that ceiling become an argument
-            // for skipping the lock — the knob-testers are the realistic case.
-            if (!canPlace)
-            {
-                ImGui.TextColored(new Vector4(1f, 0.75f, 0.35f, 1f),
-                    "You cannot build here, so screens here cannot be moved or changed.");
-                ImGui.BeginDisabled();
-            }
-
-            DrawEditor(cfg.Screens[selected]);
-
-            if (!canPlace) ImGui.EndDisabled();
+            var nick = plugin.Config.NameFor(iurl);
+            ImGui.TextDisabled($"   {(nick.Length > 0 ? nick : iurl)}  —  {Ui.Count(icount, "screen")}");
+            if (ierr is not null) Ui.ErrorText(ierr, 20f);
         }
     }
 
-    private void PlaceInFrontOfPlayer(GameView.HouseLocation? location)
-    {
-        var player = Plugin.Objects.LocalPlayer;
-        if (player is null || location is null) return;
-
-        // FFXIV's character rotation is radians about the vertical axis, with forward
-        // running along (sin, 0, cos).
-        var yaw = player.Rotation;
-        var forward = new Vector3(MathF.Sin(yaw), 0f, MathF.Cos(yaw));
-
-        var screen = new ScreenPlacement
-        {
-            Name = $"Screen {plugin.Config.Screens.Count + 1}",
-            Position = player.Position + forward * 2.0f + new Vector3(0f, 1.3f, 0f),
-            HouseId = location.Value.Id,
-        };
-        screen.FaceToward(player.Position);
-
-        plugin.Config.Screens.Add(screen);
-        selected = plugin.Config.Screens.Count - 1;
-        plugin.Config.Save();
-    }
-
-    private void DrawEditor(ScreenPlacement s)
+    /// <summary>Returns true if this row asked to be removed.</summary>
+    private bool DrawRoomRow(
+        int index, string code, int count, string? error, DateTimeOffset? loadedAt, bool fetching)
     {
         var cfg = plugin.Config;
-        var dirty = false;
+        var remove = false;
+        var paused = cfg.IsPaused(code);
 
-        var name = s.Name;
-        if (ImGui.InputText("Name", ref name, 64)) { s.Name = name; dirty = true; }
-
-        var on = s.Enabled;
-        if (ImGui.Checkbox("Visible", ref on)) { s.Enabled = on; dirty = true; }
-
-        ImGui.Spacing();
-        ImGui.TextDisabled("Position (metres)");
-
-        var pos = s.Position;
-        if (ImGui.DragFloat3("##pos", ref pos, 0.02f)) { s.Position = pos; dirty = true; }
-
-        // Nudge buttons, because dragging a float in a window while judging a sightline
-        // in the world is genuinely awkward and this is meant to be used while decorating.
-        if (ImGui.Button("← left")) { s.Position += LeftOf(s) * 0.1f; dirty = true; }
-        ImGui.SameLine();
-        if (ImGui.Button("right →")) { s.Position -= LeftOf(s) * 0.1f; dirty = true; }
-        ImGui.SameLine();
-        if (ImGui.Button("up")) { s.Position += new Vector3(0f, 0.1f, 0f); dirty = true; }
-        ImGui.SameLine();
-        if (ImGui.Button("down")) { s.Position -= new Vector3(0f, 0.1f, 0f); dirty = true; }
-
-        ImGui.Spacing();
-        ImGui.TextDisabled("Facing");
-
-        var yaw = s.RotationDegrees.Y;
-        if (ImGui.DragFloat("Yaw (turn)", ref yaw, 0.5f, -180f, 180f))
+        if (renaming == code)
         {
-            s.RotationDegrees = s.RotationDegrees with { Y = yaw };
-            dirty = true;
+            ImGui.SetNextItemWidth(200f);
+            ImGui.SetKeyboardFocusHere();
+            if (ImGui.InputText("##rename", ref renameBuffer, 64, ImGuiInputTextFlags.EnterReturnsTrue))
+            {
+                var name = renameBuffer.Trim();
+                if (name.Length == 0) cfg.RoomNames.Remove(code);
+                else cfg.RoomNames[code] = name;
+                cfg.Save();
+                renaming = string.Empty;
+            }
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Cancel")) renaming = string.Empty;
+            return false;
         }
 
-        var pitch = s.RotationDegrees.X;
-        if (ImGui.DragFloat("Pitch (tilt)", ref pitch, 0.5f, -90f, 90f))
-        {
-            s.RotationDegrees = s.RotationDegrees with { X = pitch };
-            dirty = true;
-        }
+        var label = cfg.NameFor(code);
+        if (label.Length == 0) label = code;
 
-        var roll = s.RotationDegrees.Z;
-        if (ImGui.DragFloat("Roll (lean)", ref roll, 0.5f, -180f, 180f))
+        // ⭐ Left-click copies, right-click renames — Snowcloak's gestures exactly. ⚠ Rows
+        // must stay inert otherwise: give a row another primary action and click-to-copy
+        // immediately collides with it.
+        // ⭐ Icon buttons, as Snowcloak uses — Chris' suggestion, and better than the text
+        // buttons for three reasons: they match the client we are borrowing the whole shape
+        // from, they leave far more width for a room's name, and they are a fixed size, so
+        // the row cannot be pushed apart by a longer word.
+        //
+        // ⚠⚠ The width is still *measured* rather than assumed. A flat reservation was the
+        // original bug — 60px for two buttons that needed ninety — and because the label
+        // claimed whatever was left, widening the window only widened the label and the
+        // buttons stayed clipped off the edge. Anything right-aligned has to be measured or
+        // resizing cannot rescue it. Found by Chris, 2026-09-02.
+        //
+        // ⚠ Icon-only buttons carry no words, so both of them keep a tooltip. That is not
+        // decoration: an icon nobody recognises is a button nobody presses.
+        var style = ImGui.GetStyle();
+        var iconWidth = ImGui.GetFrameHeight();
+        var buttonsWidth = iconWidth * 2f + style.ItemSpacing.X;
+
+        var labelWidth = MathF.Max(80f,
+            ImGui.GetContentRegionAvail().X - buttonsWidth - style.ItemSpacing.X);
+
+        if (paused) ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.55f, 0.55f, 0.6f, 1f));
+        ImGui.Selectable($"{(paused ? "|| " : "")}{label}##row", false, ImGuiSelectableFlags.None,
+            new Vector2(labelWidth, 0f));
+        if (paused) ImGui.PopStyleColor();
+
+        if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
         {
-            s.RotationDegrees = s.RotationDegrees with { Z = roll };
-            dirty = true;
+            ImGui.SetClipboardText(code);
+            Copied("code");
+        }
+        if (ImGui.IsItemClicked(ImGuiMouseButton.Right))
+        {
+            renaming = code;
+            renameBuffer = cfg.NameFor(code);
         }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(
-                "Yaw turns the panel to face you. Pitch tilts it forward or back, "
-                + "for a screen angled down at a seated audience. Roll leans it sideways.");
+                $"{code}\n\nClick to copy the code.\nRight-click to give it a name.");
 
-        if (ImGui.Button("Face me"))
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButton(paused ? FontAwesomeIcon.Play : FontAwesomeIcon.Pause))
         {
-            var player = Plugin.Objects.LocalPlayer;
-            if (player is not null) { s.FaceToward(player.Position); dirty = true; }
+            cfg.RoomPaused[code] = !paused;
+            cfg.Save();
+            plugin.Manifest.RefreshFlattened();
         }
-
-        ImGui.Spacing();
-        ImGui.TextDisabled("Size (metres)");
-
-        var w = s.Width;
-        if (ImGui.DragFloat("Width", ref w, 0.02f, 0.2f, 30f))
-        {
-            var ratio = s.Height / MathF.Max(s.Width, 0.0001f);
-            s.Width = w;
-            s.Height = w * ratio; // keep the shape while dragging
-            dirty = true;
-        }
-
-        var fit = s.FitToImage;
-        if (ImGui.Checkbox("Fit height to image", ref fit)) { s.FitToImage = fit; dirty = true; }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "On: width is what you set, height follows the picture's own shape,\n" +
-                "so nothing is ever stretched.\n\n" +
-                "Off: the panel keeps the size you gave it whatever is shown on it —\n" +
-                "for a fixture whose dimensions are part of the furniture, like an\n" +
-                "upright notice board that should not change shape between posters.");
+            ImGui.SetTooltip(paused
+                ? "Start showing this room's screens again."
+                : "Stop showing this room's screens without forgetting the code.");
 
-        // While fitting, height and the ratio presets are not what decides anything —
-        // showing them live would invite the user to set a value that does nothing.
-        if (s.FitToImage)
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButton(FontAwesomeIcon.Bars)) ImGui.OpenPopup("row-menu");
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Rename, copy, refresh, remove.");
+
+        if (ImGui.BeginPopup("row-menu"))
         {
-            ImGui.TextDisabled(
-                $"Height {plugin.HeightOf(s):0.00} m — from the image  ({s.DescribeAspect(plugin.AspectOf(s))})");
+            if (ImGui.MenuItem("Copy code")) { ImGui.SetClipboardText(code); Copied("code"); }
+            if (ImGui.MenuItem("Give it a name")) { renaming = code; renameBuffer = cfg.NameFor(code); }
+            if (ImGui.MenuItem("Check for new pictures")) plugin.Manifest.RefreshNow();
+            ImGui.Separator();
+            if (ImGui.MenuItem("Remove this room")) remove = true;
+            ImGui.EndPopup();
+        }
+
+        // Status under the row, quiet unless it is bad news.
+        ImGui.Indent(12f);
+        if (error is not null)
+            Ui.ErrorText(error);
+        else if (fetching)
+            ImGui.TextDisabled("checking...");
+        else if (paused)
+            ImGui.TextDisabled("paused");
+        else if (loadedAt is { } at)
+            ImGui.TextDisabled(Ui.Count(count, "screen"));
+        ImGui.Unindent(12f);
+
+        return remove;
+    }
+
+    // ── Footer ────────────────────────────────────────────────────────────────────────
+
+    private void DrawFooter()
+    {
+        ImGui.Spacing();
+        ImGui.Separator();
+
+        // ⚠ The way into the arranging panel. It also opens itself in the game's own layout
+        // mode, but a button that always works matters more than a clever trigger: if the
+        // detection is ever wrong, this is still here.
+        var canPlace = plugin.Game.CanPlaceHere();
+        if (!canPlace) ImGui.BeginDisabled();
+        if (ImGui.Button("Arrange screens in this room")) plugin.BuildWindowOpen = true;
+        if (!canPlace) ImGui.EndDisabled();
+
+        if (!canPlace)
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled(plugin.Game.GetLocation() is null
+                ? "(only inside a house)"
+                : "(you cannot build here)");
+        }
+
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButton(FontAwesomeIcon.Cog)) plugin.SettingsWindowOpen = true;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Settings");
+
+        if (DateTimeOffset.UtcNow - copiedAt < TimeSpan.FromSeconds(2))
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(0.5f, 0.9f, 0.6f, 1f), $"{copiedWhat} copied");
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────────
+
+    private void Copied(string what)
+    {
+        copiedAt = DateTimeOffset.UtcNow;
+        copiedWhat = char.ToUpperInvariant(what[0]) + what[1..];
+    }
+
+    /// <summary>
+    /// Centred text at a chosen size.
+    ///
+    /// ⭐⭐ Size is the whole point here. Chris, 2026-09-02, comparing against Snowcloak:
+    /// *"our top code is normal where they make it the largest part of the window to grab
+    /// attention."* He is right, and it is not decoration — **the code is what this window
+    /// is for.** A window whose most important element is the same size as its labels makes
+    /// the reader hunt for the thing they came to find.
+    ///
+    /// ⚠ Measure *after* setting the scale. CalcTextSize honours the current font scale, so
+    /// measuring first centres the text for a size it is not going to be drawn at.
+    /// </summary>
+    private static bool Centred(string text, float scale, Vector4 colour, bool asButton = false)
+    {
+        ImGui.SetWindowFontScale(scale);
+
+        var width = ImGui.CalcTextSize(text).X;
+        var offset = (ImGui.GetContentRegionAvail().X - width) * 0.5f;
+        if (offset > 0f) ImGui.SetCursorPosX(ImGui.GetCursorPosX() + offset);
+
+        var clicked = false;
+
+        if (asButton)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0f, 0f, 0f, 0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(1f, 1f, 1f, 0.08f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(1f, 1f, 1f, 0.14f));
+            ImGui.PushStyleColor(ImGuiCol.Text, colour);
+            clicked = ImGui.Button(text);
+            ImGui.PopStyleColor(4);
         }
         else
         {
-            var h = s.Height;
-            if (ImGui.DragFloat("Height", ref h, 0.02f, 0.2f, 30f)) { s.Height = h; dirty = true; }
-
-            // ⭐ Named shapes rather than three buttons, so the person running a board can
-            // tell contributors "it is 9:16, crop to fit" and be understood.
-            ImGui.SetNextItemWidth(180f);
-            if (ImGui.BeginCombo("Shape", s.DescribeAspect(plugin.AspectOf(s))))
-            {
-                foreach (var (shapeName, pw, ph) in ScreenPlacement.AspectPresets)
-                {
-                    if (!ImGui.Selectable(shapeName)) continue;
-                    s.Height = s.Width * ph / pw;
-                    dirty = true;
-                }
-                ImGui.EndCombo();
-            }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(
-                    "Sets the height from the width. The label is what to tell anyone " +
-                    "sending you a picture for this board.");
+            ImGui.TextColored(colour, text);
         }
 
-        // ⚠⚠ Depth used to sit inside an `if (!s.FitToImage)` block, so a panel taking
-        // its shape from the picture could not be given any thickness — and thickness is
-        // what turns a flat decal into a mounted object, which is the entire reason it
-        // was built. The two settings have nothing to do with each other: the block was
-        // misplaced, and the comment justifying it was written to fit the mistake rather
-        // than the code. The giveaway was a block body that was never indented.
-        // Reported by Chris, 2026-09-02.
-        var thickness = s.Thickness;
-        if (ImGui.SliderFloat("Depth", ref thickness, 0f, 0.30f, "%.3f m"))
-        {
-            s.Thickness = thickness;
-            dirty = true;
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "How far the panel stands out from the wall. 0 is a flat picture.\n\n" +
-                "A few centimetres turns it into a mounted plaque, so holding it off the " +
-                "wall to clear the scenery looks deliberate instead of like it is floating.");
-
-        if (s.Thickness > 0.0005f)
-        {
-            var edgeColour = s.EdgeColour;
-            if (ImGui.ColorEdit3("Edge colour", ref edgeColour)) { s.EdgeColour = edgeColour; dirty = true; }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("The sides. Dark reads as a frame; try a wood tone for a board.");
-        }
-
-        // ⭐ This one genuinely is fitting-dependent, so it stays gated: when the panel
-        // takes the picture’s shape the two always match, so stretch, fill and letterbox
-        // all give an identical result and the control would be a choice with no outcome.
-        if (!s.FitToImage)
-        {
-            var fitting = (int)s.Fit;
-            ImGui.SetNextItemWidth(160f);
-            if (ImGui.Combo("Picture", ref fitting, "Stretch to fit Fill and crop Letterbox "))
-            {
-                s.Fit = (ScreenPlacement.Fitting)fitting;
-                dirty = true;
-            }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(
-                    "What happens when the picture is a different shape to the panel.\n\n" +
-                    "Fill and crop keeps the picture undistorted and trims the overflow — " +
-                    "the right choice when you are filling a frame.\n" +
-                    "Letterbox keeps it whole and leaves the rest empty.\n" +
-                    "Stretch distorts it.");
-        }
-
-        var brightness = s.Brightness;
-        if (ImGui.SliderFloat("Brightness", ref brightness, 0.05f, 2f))
-        {
-            s.Brightness = brightness;
-            dirty = true;
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "Dims or lifts the picture while it stays solid. Use this for a bright " +
-                "photo in a dim room.\n\nNot the same as opacity: dimming with opacity " +
-                "makes the picture see-through instead of dark.");
-
-        var opacity = s.Opacity;
-        if (ImGui.SliderFloat("Opacity", ref opacity, 0f, 1f)) { s.Opacity = opacity; dirty = true; }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("How solid the panel is. Lower values let the room show through it.");
-
-        if (ImGui.CollapsingHeader("Adjust"))
-        {
-            var contrast = s.Contrast;
-            if (ImGui.SliderFloat("Contrast", ref contrast, 0f, 2f)) { s.Contrast = contrast; dirty = true; }
-
-            var saturation = s.Saturation;
-            if (ImGui.SliderFloat("Colour", ref saturation, 0f, 2f)) { s.Saturation = saturation; dirty = true; }
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("0 is black and white.");
-
-            var tint = s.Tint;
-            if (ImGui.ColorEdit3("Tint", ref tint)) { s.Tint = tint; dirty = true; }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Multiplied into the picture. Warm for lamplight, cold for a hologram.");
-
-            var edge = s.EdgeSoftness;
-            if (ImGui.SliderFloat("Soft edge", ref edge, 0f, 0.5f)) { s.EdgeSoftness = edge; dirty = true; }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(
-                    "Fades the outside of the panel.\n\nA hard edge reads as a sticker pasted " +
-                    "on the world; a few percent does more to make a screen look placed than " +
-                    "any of the colour controls.");
-
-            if (ImGui.Button("Reset adjustments"))
-            {
-                s.Brightness = s.Contrast = s.Saturation = 1f;
-                s.Tint = Vector3.One;
-                s.EdgeSoftness = 0f;
-                dirty = true;
-            }
-        }
-
-        ImGui.Spacing();
-        ImGui.TextDisabled("Showing");
-
-        // ── Sources. One entry is a sign; several is a slideshow. ────────────────────
-        var removeAt = -1;
-        var now = DateTimeOffset.UtcNow;
-        var showing = s.SlideIndexAt(now);
-
-        for (var i = 0; i < s.Sources.Count; i++)
-        {
-            ImGui.PushID(i);
-
-            // Mark the slide currently on the wall, so a list of near-identical URLs is
-            // not a guessing game about which one you are looking at.
-            if (s.Sources.Count > 1)
-            {
-                // ⚠ ASCII only. Dalamud's UI font does not carry the arrow and geometric
-                // shape blocks, so a ▶ renders as whatever the fallback happens to be —
-                // it came out as "=" in testing, which reads as a bug rather than a cursor.
-                ImGui.TextColored(
-                    i == showing ? new Vector4(0.5f, 0.9f, 0.6f, 1f) : new Vector4(0.4f, 0.4f, 0.4f, 1f),
-                    i == showing ? ">" : " ");
-                ImGui.SameLine();
-            }
-
-            var entry = s.Sources[i];
-            ImGui.SetNextItemWidth(320f);
-            if (ImGui.InputText("##src", ref entry, 512))
-            {
-                s.Sources[i] = Plugin.NormalisePath(entry);
-                dirty = true;
-            }
-
-            ImGui.SameLine();
-            if (ImGui.Button("×")) removeAt = i;
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove this one.");
-
-            if (Plugin.IsWebUrl(s.Sources[i]))
-            {
-                ImGui.SameLine();
-                if (ImGui.Button("Reload")) plugin.ForgetContent(s.Sources[i]);
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip(
-                        "Fetch it again. A downloaded image is cached, so replacing it " +
-                        "at the source needs this before the change shows up here.");
-            }
-
-            // ⚠ A failed load falls back to the test card, which looks exactly like a
-            // screen that is simply working. Say so, or a typo is indistinguishable
-            // from success.
-            if (plugin.ContentErrors.TryGetValue(s.Sources[i], out var err))
-                ErrorText(err, 12f);
-
-            // A GIF that had to be shrunk or thinned still works, so nothing above will
-            // mention it — but "why does this look softer than it does in Discord" has
-            // exactly one answer and it should be here rather than guessed at.
-            if (plugin.ContentNotes.TryGetValue(s.Sources[i], out var note))
-            {
-                ImGui.Indent(12f);
-                ImGui.TextColored(new Vector4(0.75f, 0.75f, 0.8f, 1f), note);
-                ImGui.Unindent(12f);
-            }
-
-            // An album is one line that stands for many pictures; say how many, or the
-            // rotation length is a mystery.
-            if (Albums.IsAlbum(s.Sources[i]))
-            {
-                var n = plugin.Albums.CountFor(s.Sources[i]);
-                var albumErr = plugin.Albums.ErrorFor(s.Sources[i]);
-                if (albumErr is not null)
-                    ErrorText(albumErr, 12f);
-                else
-                    ImGui.TextDisabled(n == 0 ? "   album — reading..." : $"   album — {n} picture(s)");
-            }
-
-            ImGui.PopID();
-        }
-
-        if (removeAt >= 0) { s.Sources.RemoveAt(removeAt); dirty = true; }
-
-        if (ImGui.Button("Add image")) { s.Sources.Add(string.Empty); dirty = true; }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "A file on this PC, or a web address starting with https://\n\n" +
-                "File: shift-right-click in Explorer, \"Copy as path\" — the quotes it " +
-                "adds are stripped for you.\n\n" +
-                "Web: must link to the picture itself, not the page it sits on. An " +
-                "imgur.com/... link is rewritten to the direct image automatically.\n\n" +
-                "Add more than one and the screen cycles through them.\n\n" +
-                "An Imgur album link works too: drop a poster in the album and every " +
-                "screen picks it up, with nothing here to edit.");
-
-        if (s.Sources.Count == 0)
-            ImGui.TextDisabled("Nothing set — showing the test card.");
-
-        var rotates = s.Sources.Count > 1
-                      || (s.Sources.Count == 1 && Albums.IsAlbum(s.Sources[0])
-                          && plugin.Albums.CountFor(s.Sources[0]) > 1);
-        if (rotates)
-        {
-            var dwell = s.DwellSeconds;
-            if (ImGui.DragFloat("Seconds per slide", ref dwell, 0.5f, 1f, 600f))
-            {
-                s.DwellSeconds = dwell;
-                dirty = true;
-            }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(
-                    "Which slide is showing comes from the clock, not from a timer this " +
-                    "client started — so everyone in the room sees the same one without " +
-                    "anything being sent between you.");
-
-            var change = (int)s.Change;
-            ImGui.SetNextItemWidth(160f);
-            if (ImGui.Combo("Change", ref change,
-                    "Cut Crossfade Wipe down Wipe up Wipe right Wipe left "))
-            {
-                s.Change = (ScreenPlacement.Transition)change;
-                dirty = true;
-            }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(
-                    "How one picture gives way to the next. The next slide is already " +
-                    "downloaded, so this costs nothing.");
-
-            if (s.Change != ScreenPlacement.Transition.Cut)
-            {
-                var fade = s.ChangeSeconds;
-                if (ImGui.SliderFloat("Change takes", ref fade, 0.1f, 5f, "%.1f s"))
-                {
-                    s.ChangeSeconds = fade;
-                    dirty = true;
-                }
-            }
-        }
-
-        ImGui.Spacing();
-        if (ImGui.Button("Delete this screen"))
-        {
-            cfg.Screens.Remove(s);
-            selected = -1;
-            dirty = true;
-        }
-
-        if (dirty) cfg.Save();
+        // ⚠⚠ Always restore. The scale is window-wide, so leaving it set draws every
+        // remaining control at the wrong size — and the failure is silent and total.
+        ImGui.SetWindowFontScale(1f);
+        return clicked;
     }
 
-    /// <summary>
-    /// Open a page in the user's browser. ⚠ UseShellExecute, or .NET tries to run the URL
-    /// as a program and nothing happens.
-    /// </summary>
-    private static void OpenLink(string url)
-    {
-        try
-        {
-            System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Warning($"Could not open {url}: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Coloured text that wraps. ⚠ Plain TextColored runs off the window edge, and the
-    /// messages most worth reading are the long ones — an error clipped mid-sentence is
-    /// barely better than no error at all.
-    /// </summary>
-    private static void ErrorText(string text, float indent = 0f)
-    {
-        if (indent > 0f) ImGui.Indent(indent);
-        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.5f, 0.45f, 1f));
-        ImGui.TextWrapped(text);
-        ImGui.PopStyleColor();
-        if (indent > 0f) ImGui.Unindent(indent);
-    }
-
-    /// <summary>Trim a link for display; the middle of a paste URL carries no information.</summary>
-    private static string Shorten(string url)
-        => url.Length <= 46 ? url : url[..28] + "..." + url[^12..];
-
-    /// <summary>Panel-left in world terms, for the nudge buttons.</summary>
-    private static Vector3 LeftOf(ScreenPlacement s)
-    {
-        var ax = s.AxisX;
-        return ax.LengthSquared() < 1e-6f ? Vector3.UnitX : -Vector3.Normalize(ax);
-    }
+    private static readonly Vector4 TitleColour = new(0.62f, 0.82f, 1f, 1f);
+    private static readonly Vector4 CodeColour = new(0.45f, 0.68f, 0.95f, 1f);
 }

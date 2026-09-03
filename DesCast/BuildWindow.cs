@@ -1,0 +1,647 @@
+﻿using System;
+using System.Numerics;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Windowing;
+
+namespace DesCast;
+
+/// <summary>
+/// Everything about a screen as an object: placing it, moving it, sizing it, choosing the
+/// surface it behaves like, and pointing it at pictures.
+///
+/// ⭐⭐ Split out of the main window on 2026-09-02 because <b>placement and content have
+/// different frequencies.</b> Arranging a room is a setup activity done once and then not
+/// again for months; the follow list and the settings are looked at whenever. Anything used
+/// once and anything used daily must not share a window, or the daily thing pays a tax for
+/// the once thing on every visit.
+///
+/// ⭐ It also means a participant never sees any of this. They install, log in, and the
+/// screens are there — opening a panel full of geometry in front of somebody who has nothing
+/// to arrange is the clearest possible signal that a tool was built for its author.
+///
+/// ⚠ Gated on build permission, like placement itself. See GameView.CanPlaceHere.
+/// </summary>
+public sealed class BuildWindow : Window
+{
+    private readonly Plugin plugin;
+    private int selected = -1;
+    private DateTimeOffset copiedAt = DateTimeOffset.MinValue;
+
+    public BuildWindow(Plugin plugin)
+        : base("Arrange screens##descast-build")
+    {
+        this.plugin = plugin;
+        SizeConstraints = new WindowSizeConstraints
+        {
+            MinimumSize = new Vector2(380, 320),
+            MaximumSize = new Vector2(900, 1400),
+        };
+    }
+
+    public override void Draw()
+    {
+        var cfg = plugin.Config;
+        var location = plugin.Game.GetLocation();
+
+        if (location is null)
+        {
+            ImGui.TextColored(new Vector4(1f, 0.75f, 0.35f, 1f),
+                "Screens live inside a house. Step indoors to arrange them.");
+            return;
+        }
+
+        ImGui.TextDisabled(plugin.DescribeLocation(location.Value));
+        ImGui.Separator();
+        // ── Placing ───────────────────────────────────────────────────────────────────
+        var canPlace = location is not null && plugin.Game.CanPlaceHere();
+        if (!canPlace) ImGui.BeginDisabled();
+        if (ImGui.Button("Put a screen here"))
+            PlaceInFrontOfPlayer(location);
+        if (!canPlace) ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Drops a panel about two metres ahead at eye height, facing you.");
+
+        // ⭐ Authoring by placement, not by typing coordinates. Chris' idea: arrange the
+        // room in game, copy, paste into whatever hosts the file. Nobody should ever have
+        // to work out a world coordinate by hand.
+        var mine = cfg.Screens.FindAll(s => location is not null && location.Value.Matches(s));
+        if (mine.Count > 0)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button($"Copy this room ({mine.Count})"))
+            {
+                var label = location is null ? string.Empty : plugin.DescribeLocation(location.Value);
+                ImGui.SetClipboardText(plugin.ExportManifest(mine, label));
+                copiedAt = DateTimeOffset.UtcNow;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "Copies your screens in this house as the shared-room file.\n\n" +
+                    "Paste it into a gist or pastebin, then put that link in the " +
+                    "\"Shared screens\" box above — yours and everyone else's.");
+
+            if (DateTimeOffset.UtcNow - copiedAt < TimeSpan.FromSeconds(3))
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(new Vector4(0.5f, 0.9f, 0.6f, 1f), "copied");
+            }
+        }
+
+        ImGui.Separator();
+
+        // ── The screens in this house ─────────────────────────────────────────────────
+        var any = false;
+        for (var i = 0; i < cfg.Screens.Count; i++)
+        {
+            var s = cfg.Screens[i];
+            if (location is not null && !location.Value.Matches(s)) continue;
+            any = true;
+
+            ImGui.PushID(i);
+            if (ImGui.Selectable($"{s.Name}##sel", selected == i)) selected = i;
+            ImGui.PopID();
+        }
+
+        if (!any) ImGui.TextDisabled("No screens of your own in this room.");
+
+        // Shared screens, listed but not editable — they belong to the file, and letting
+        // someone drag one here would produce a change that silently vanishes on the next
+        // refresh. Edit the file instead.
+        var shared = 0;
+        foreach (var s in plugin.Manifest.Screens)
+        {
+            if (location is null || !location.Value.Matches(s)) continue;
+            if (shared++ == 0) ImGui.TextDisabled("Shared:");
+            ImGui.TextDisabled($"   {s.Name}  ({s.Sources.Count} image(s))");
+        }
+        if (shared > 0 && ImGui.IsItemHovered())
+            ImGui.SetTooltip("From the shared file. Edit that file to change these.");
+
+
+        if (selected >= 0 && selected < cfg.Screens.Count)
+        {
+            ImGui.Separator();
+
+            // ⭐⭐ Editing is gated on build permission for the same reason placing is.
+            //
+            // Chris, 2026-09-02, on why this matters at all: the harm is not that somebody
+            // sees a screen in a room — only the person who subscribed sees it. It is that
+            // somebody walks into a room that is not theirs, covers it in whatever they
+            // like, and hands the file to their clique. That is an FC drama generator with
+            // no defence and no way for the victim to even know.
+            //
+            // ⚠ A lock, explicitly, not a wall. It stops someone trying door handles; it
+            // does not stop anyone willing to hand-edit the file, and it is not meant to.
+            // Chris: *"it will not prevent a determined lockpick, but it will prevent some
+            // random person testing the knobs."* Do not let that ceiling become an argument
+            // for skipping the lock — the knob-testers are the realistic case.
+            if (!canPlace)
+            {
+                ImGui.TextColored(new Vector4(1f, 0.75f, 0.35f, 1f),
+                    "You cannot build here, so screens here cannot be moved or changed.");
+                ImGui.BeginDisabled();
+            }
+
+            DrawEditor(cfg.Screens[selected]);
+
+            if (!canPlace) ImGui.EndDisabled();
+        }
+    }
+
+    private void PlaceInFrontOfPlayer(GameView.HouseLocation? location)
+    {
+        var player = Plugin.Objects.LocalPlayer;
+        if (player is null || location is null) return;
+
+        // FFXIV's character rotation is radians about the vertical axis, with forward
+        // running along (sin, 0, cos).
+        var yaw = player.Rotation;
+        var forward = new Vector3(MathF.Sin(yaw), 0f, MathF.Cos(yaw));
+
+        var screen = new ScreenPlacement
+        {
+            Name = $"Screen {plugin.Config.Screens.Count + 1}",
+            Position = player.Position + forward * 2.0f + new Vector3(0f, 1.3f, 0f),
+            HouseId = location.Value.Id,
+        };
+        screen.FaceToward(player.Position);
+
+        plugin.Config.Screens.Add(screen);
+        selected = plugin.Config.Screens.Count - 1;
+        plugin.Config.Save();
+    }
+
+    /// <summary>
+    /// ⚠ Arrays rather than NUL-separated strings. Both work, but the separators are
+    /// invisible in an editor and one careless edit silently merges two options into one —
+    /// which is exactly what happened here on 2026-09-02.
+    /// ⭐ Order must match the matching enum in ScreenPlacement.
+    /// </summary>
+    private static readonly string[] FitLabels = { "Stretch it", "Crop it to fill", "Fit it all in" };
+
+    private static readonly string[] ChangeLabels =
+        { "Cut", "Crossfade", "Wipe down", "Wipe up", "Wipe right", "Wipe left" };
+
+    /// <summary>
+    /// What kind of surface the panel behaves like.
+    ///
+    /// ⭐⭐ Brightness, contrast, colourfulness and tint are *surface* properties, not image
+    /// correction — Chris, 2026-09-02: they decide what sort of object this is, and a badly
+    /// exposed picture is the uploader's problem. So the four are set together by naming the
+    /// object, which is a choice anybody can make, rather than by tuning four numbers, which
+    /// is a choice almost nobody can. The sliders stay underneath for whoever wants them.
+    /// </summary>
+    private static readonly (string Name, float Brightness, float Contrast, float Saturation, Vector3 Tint)[]
+        SurfacePresets =
+        {
+            ("Backlit screen", 1.00f, 1.00f, 1.00f, new Vector3(1.00f, 1.00f, 1.00f)),
+            ("Matte poster",   0.82f, 0.95f, 0.92f, new Vector3(1.00f, 0.99f, 0.96f)),
+            ("Faded sign",     0.74f, 0.82f, 0.62f, new Vector3(1.00f, 0.96f, 0.88f)),
+            ("Stone tablet",   0.68f, 0.86f, 0.30f, new Vector3(0.96f, 0.93f, 0.86f)),
+        };
+
+    /// <summary>Which preset a screen currently matches, or -1 for "somebody has been tuning".</summary>
+    private static int MatchSurface(ScreenPlacement s)
+    {
+        for (var i = 0; i < SurfacePresets.Length; i++)
+        {
+            var p = SurfacePresets[i];
+            if (MathF.Abs(s.Brightness - p.Brightness) > 0.02f) continue;
+            if (MathF.Abs(s.Contrast - p.Contrast) > 0.02f) continue;
+            if (MathF.Abs(s.Saturation - p.Saturation) > 0.02f) continue;
+            if ((s.Tint - p.Tint).Length() > 0.03f) continue;
+            return i;
+        }
+
+        return -1;
+    }
+
+    private void DrawEditor(ScreenPlacement s)
+    {
+        var cfg = plugin.Config;
+        var dirty = false;
+
+        var name = s.Name;
+        if (ImGui.InputText("Name", ref name, 64)) { s.Name = name; dirty = true; }
+
+        var on = s.Enabled;
+        if (ImGui.Checkbox("Switched on", ref on)) { s.Enabled = on; dirty = true; }
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("Where it is");
+
+        var pos = s.Position;
+        if (ImGui.DragFloat3("##pos", ref pos, 0.02f)) { s.Position = pos; dirty = true; }
+
+        // Nudge buttons, because dragging a float in a window while judging a sightline
+        // in the world is genuinely awkward and this is meant to be used while decorating.
+        if (ImGui.Button("← left")) { s.Position += LeftOf(s) * 0.1f; dirty = true; }
+        ImGui.SameLine();
+        if (ImGui.Button("right →")) { s.Position -= LeftOf(s) * 0.1f; dirty = true; }
+        ImGui.SameLine();
+        if (ImGui.Button("up")) { s.Position += new Vector3(0f, 0.1f, 0f); dirty = true; }
+        ImGui.SameLine();
+        if (ImGui.Button("down")) { s.Position -= new Vector3(0f, 0.1f, 0f); dirty = true; }
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("Which way it faces");
+
+        var yaw = s.RotationDegrees.Y;
+        if (ImGui.DragFloat("Turn", ref yaw, 0.5f, -180f, 180f))
+        {
+            s.RotationDegrees = s.RotationDegrees with { Y = yaw };
+            dirty = true;
+        }
+
+        var pitch = s.RotationDegrees.X;
+        if (ImGui.DragFloat("Tilt", ref pitch, 0.5f, -90f, 90f))
+        {
+            s.RotationDegrees = s.RotationDegrees with { X = pitch };
+            dirty = true;
+        }
+
+        var roll = s.RotationDegrees.Z;
+        if (ImGui.DragFloat("Lean", ref roll, 0.5f, -180f, 180f))
+        {
+            s.RotationDegrees = s.RotationDegrees with { Z = roll };
+            dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "Yaw turns the panel to face you. Pitch tilts it forward or back, "
+                + "for a screen angled down at a seated audience. Roll leans it sideways.");
+
+        if (ImGui.Button("Face me"))
+        {
+            var player = Plugin.Objects.LocalPlayer;
+            if (player is not null) { s.FaceToward(player.Position); dirty = true; }
+        }
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("How big");
+
+        var w = s.Width;
+        if (ImGui.DragFloat("Width (metres)", ref w, 0.02f, 0.2f, 30f))
+        {
+            var ratio = s.Height / MathF.Max(s.Width, 0.0001f);
+            s.Width = w;
+            s.Height = w * ratio; // keep the shape while dragging
+            dirty = true;
+        }
+
+        var fit = s.FitToImage;
+        if (ImGui.Checkbox("Match the picture's shape", ref fit)) { s.FitToImage = fit; dirty = true; }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "On: width is what you set, height follows the picture's own shape,\n" +
+                "so nothing is ever stretched.\n\n" +
+                "Off: the panel keeps the size you gave it whatever is shown on it —\n" +
+                "for a fixture whose dimensions are part of the furniture, like an\n" +
+                "upright notice board that should not change shape between posters.");
+
+        // While fitting, height and the ratio presets are not what decides anything —
+        // showing them live would invite the user to set a value that does nothing.
+        if (s.FitToImage)
+        {
+            ImGui.TextDisabled(
+                $"Height {plugin.HeightOf(s):0.00} m — from the image  ({s.DescribeAspect(plugin.AspectOf(s))})");
+        }
+        else
+        {
+            var h = s.Height;
+            if (ImGui.DragFloat("Height (metres)", ref h, 0.02f, 0.2f, 30f)) { s.Height = h; dirty = true; }
+
+            // ⭐ Named shapes rather than three buttons, so the person running a board can
+            // tell contributors "it is 9:16, crop to fit" and be understood.
+            ImGui.SetNextItemWidth(180f);
+            if (ImGui.BeginCombo("Shape it like", s.DescribeAspect(plugin.AspectOf(s))))
+            {
+                foreach (var (shapeName, pw, ph) in ScreenPlacement.AspectPresets)
+                {
+                    if (!ImGui.Selectable(shapeName)) continue;
+                    s.Height = s.Width * ph / pw;
+                    dirty = true;
+                }
+                ImGui.EndCombo();
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "Sets the height from the width. The label is what to tell anyone " +
+                    "sending you a picture for this board.");
+        }
+
+        // ⚠⚠ Depth used to sit inside an `if (!s.FitToImage)` block, so a panel taking
+        // its shape from the picture could not be given any thickness — and thickness is
+        // what turns a flat decal into a mounted object, which is the entire reason it
+        // was built. The two settings have nothing to do with each other: the block was
+        // misplaced, and the comment justifying it was written to fit the mistake rather
+        // than the code. The giveaway was a block body that was never indented.
+        // Reported by Chris, 2026-09-02.
+        var thickness = s.Thickness;
+        if (ImGui.SliderFloat("Thickness", ref thickness, 0f, 0.30f, "%.3f m"))
+        {
+            s.Thickness = thickness;
+            dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "How far the panel stands out from the wall. 0 is a flat picture.\n\n" +
+                "A few centimetres turns it into a mounted plaque, so holding it off the " +
+                "wall to clear the scenery looks deliberate instead of like it is floating.");
+
+        if (s.Thickness > 0.0005f)
+        {
+            var edgeColour = s.EdgeColour;
+            if (ImGui.ColorEdit3("Edge colour", ref edgeColour)) { s.EdgeColour = edgeColour; dirty = true; }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("The sides. Dark reads as a frame; try a wood tone for a board.");
+        }
+
+        // ⭐ This one genuinely is fitting-dependent, so it stays gated: when the panel
+        // takes the picture’s shape the two always match, so stretch, fill and letterbox
+        // all give an identical result and the control would be a choice with no outcome.
+        if (!s.FitToImage)
+        {
+            var fitting = (int)s.Fit;
+            ImGui.SetNextItemWidth(160f);
+            if (ImGui.Combo("If the picture does not fit", ref fitting, FitLabels, FitLabels.Length))
+            {
+                s.Fit = (ScreenPlacement.Fitting)fitting;
+                dirty = true;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "What happens when the picture is a different shape to the panel.\n\n" +
+                    "Fill and crop keeps the picture undistorted and trims the overflow — " +
+                    "the right choice when you are filling a frame.\n" +
+                    "Letterbox keeps it whole and leaves the rest empty.\n" +
+                    "Stretch distorts it.");
+        }
+
+        // ⭐ Name the object, not the numbers.
+        ImGui.Spacing();
+        var surface = MatchSurface(s);
+        var surfaceLabel = surface >= 0 ? SurfacePresets[surface].Name : "Custom";
+
+        ImGui.SetNextItemWidth(200f);
+        if (ImGui.BeginCombo("Surface", surfaceLabel))
+        {
+            for (var i = 0; i < SurfacePresets.Length; i++)
+            {
+                if (!ImGui.Selectable(SurfacePresets[i].Name, i == surface)) continue;
+
+                var preset = SurfacePresets[i];
+                s.Brightness = preset.Brightness;
+                s.Contrast = preset.Contrast;
+                s.Saturation = preset.Saturation;
+                s.Tint = preset.Tint;
+                dirty = true;
+            }
+
+            ImGui.EndCombo();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "What sort of thing this panel is, rather than a correction to the picture.\n\n" +
+                "A backlit screen glows; a matte poster sits into the room; a faded sign\n" +
+                "looks weathered. Fine tuning below overrides any of them.");
+
+        var brightness = s.Brightness;
+        if (ImGui.SliderFloat("Brightness", ref brightness, 0.05f, 2f))
+        {
+            s.Brightness = brightness;
+            dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "Dims or lifts the picture while it stays solid. Use this for a bright " +
+                "photo in a dim room.\n\nNot the same as opacity: dimming with opacity " +
+                "makes the picture see-through instead of dark.");
+
+        var opacity = s.Opacity;
+        if (ImGui.SliderFloat("See-through", ref opacity, 0f, 1f)) { s.Opacity = opacity; dirty = true; }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("How solid the panel is. Lower values let the room show through it.");
+
+        if (ImGui.CollapsingHeader("Fine tuning"))
+        {
+            var contrast = s.Contrast;
+            if (ImGui.SliderFloat("Contrast", ref contrast, 0f, 2f)) { s.Contrast = contrast; dirty = true; }
+
+            var saturation = s.Saturation;
+            if (ImGui.SliderFloat("Colourfulness", ref saturation, 0f, 2f)) { s.Saturation = saturation; dirty = true; }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("0 is black and white.");
+
+            var tint = s.Tint;
+            if (ImGui.ColorEdit3("Tint", ref tint)) { s.Tint = tint; dirty = true; }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Multiplied into the picture. Warm for lamplight, cold for a hologram.");
+
+            var edge = s.EdgeSoftness;
+            if (ImGui.SliderFloat("Fade the edges", ref edge, 0f, 0.5f)) { s.EdgeSoftness = edge; dirty = true; }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "Fades the outside of the panel.\n\nA hard edge reads as a sticker pasted " +
+                    "on the world; a few percent does more to make a screen look placed than " +
+                    "any of the colour controls.");
+
+            if (ImGui.Button("Back to normal"))
+            {
+                s.Brightness = s.Contrast = s.Saturation = 1f;
+                s.Tint = Vector3.One;
+                s.EdgeSoftness = 0f;
+                dirty = true;
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("What it shows");
+
+        // ── Sources. One entry is a sign; several is a slideshow. ────────────────────
+        var removeAt = -1;
+        var now = DateTimeOffset.UtcNow;
+        var showing = s.SlideIndexAt(now);
+
+        for (var i = 0; i < s.Sources.Count; i++)
+        {
+            ImGui.PushID(i);
+
+            // Mark the slide currently on the wall, so a list of near-identical URLs is
+            // not a guessing game about which one you are looking at.
+            if (s.Sources.Count > 1)
+            {
+                // ⚠ ASCII only. Dalamud's UI font does not carry the arrow and geometric
+                // shape blocks, so a ▶ renders as whatever the fallback happens to be —
+                // it came out as "=" in testing, which reads as a bug rather than a cursor.
+                ImGui.TextColored(
+                    i == showing ? new Vector4(0.5f, 0.9f, 0.6f, 1f) : new Vector4(0.4f, 0.4f, 0.4f, 1f),
+                    i == showing ? ">" : " ");
+                ImGui.SameLine();
+            }
+
+            var entry = s.Sources[i];
+            ImGui.SetNextItemWidth(320f);
+            if (ImGui.InputText("##src", ref entry, 512))
+            {
+                s.Sources[i] = Plugin.NormalisePath(entry);
+                dirty = true;
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("×")) removeAt = i;
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove this one.");
+
+            if (Plugin.IsWebUrl(s.Sources[i]))
+            {
+                ImGui.SameLine();
+                if (ImGui.Button("Reload")) plugin.ForgetContent(s.Sources[i]);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(
+                        "Fetch it again. A downloaded image is cached, so replacing it " +
+                        "at the source needs this before the change shows up here.");
+            }
+
+            // ⚠ A failed load falls back to the test card, which looks exactly like a
+            // screen that is simply working. Say so, or a typo is indistinguishable
+            // from success.
+            if (plugin.ContentErrors.TryGetValue(s.Sources[i], out var err))
+                Ui.ErrorText(err, 12f);
+
+            // A GIF that had to be shrunk or thinned still works, so nothing above will
+            // mention it — but "why does this look softer than it does in Discord" has
+            // exactly one answer and it should be here rather than guessed at.
+            if (plugin.ContentNotes.TryGetValue(s.Sources[i], out var note))
+            {
+                ImGui.Indent(12f);
+                ImGui.TextColored(new Vector4(0.75f, 0.75f, 0.8f, 1f), note);
+                ImGui.Unindent(12f);
+            }
+
+            // An album is one line that stands for many pictures; say how many, or the
+            // rotation length is a mystery.
+            if (Albums.IsAlbum(s.Sources[i]))
+            {
+                var n = plugin.Albums.CountFor(s.Sources[i]);
+                var albumErr = plugin.Albums.ErrorFor(s.Sources[i]);
+                if (albumErr is not null)
+                    Ui.ErrorText(albumErr, 12f);
+                else
+                    ImGui.TextDisabled(n == 0 ? "   album — reading..." : $"   album — {n} picture(s)");
+            }
+
+            ImGui.PopID();
+        }
+
+        if (removeAt >= 0) { s.Sources.RemoveAt(removeAt); dirty = true; }
+
+        if (ImGui.Button("Add a picture")) { s.Sources.Add(string.Empty); dirty = true; }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "A file on this PC, or a web address starting with https://\n\n" +
+                "File: shift-right-click in Explorer, \"Copy as path\" — the quotes it " +
+                "adds are stripped for you.\n\n" +
+                "Web: must link to the picture itself, not the page it sits on. An " +
+                "imgur.com/... link is rewritten to the direct image automatically.\n\n" +
+                "Add more than one and the screen cycles through them.\n\n" +
+                "An Imgur album link works too: drop a poster in the album and every " +
+                "screen picks it up, with nothing here to edit.");
+
+        if (s.Sources.Count == 0)
+            ImGui.TextDisabled("Nothing set — showing the test card.");
+
+        var rotates = s.Sources.Count > 1
+                      || (s.Sources.Count == 1 && Albums.IsAlbum(s.Sources[0])
+                          && plugin.Albums.CountFor(s.Sources[0]) > 1);
+        if (rotates)
+        {
+            var dwell = s.DwellSeconds;
+            if (ImGui.DragFloat("Show each one for", ref dwell, 0.5f, 1f, 600f))
+            {
+                s.DwellSeconds = dwell;
+                dirty = true;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "Which slide is showing comes from the clock, not from a timer this " +
+                    "client started — so everyone in the room sees the same one without " +
+                    "anything being sent between you.");
+
+            var change = (int)s.Change;
+            ImGui.SetNextItemWidth(160f);
+            if (ImGui.Combo("Between pictures", ref change, ChangeLabels, ChangeLabels.Length))
+            {
+                s.Change = (ScreenPlacement.Transition)change;
+                dirty = true;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "How one picture gives way to the next. The next slide is already " +
+                    "downloaded, so this costs nothing.");
+
+            if (s.Change != ScreenPlacement.Transition.Cut)
+            {
+                var fade = s.ChangeSeconds;
+                if (ImGui.SliderFloat("Which takes", ref fade, 0.1f, 5f, "%.1f s"))
+                {
+                    s.ChangeSeconds = fade;
+                    dirty = true;
+                }
+            }
+        }
+
+        ImGui.Spacing();
+        if (ImGui.Button("Delete this screen"))
+        {
+            cfg.Screens.Remove(s);
+            selected = -1;
+            dirty = true;
+        }
+
+        if (dirty) cfg.Save();
+    }
+
+    /// <summary>
+    /// Open a page in the user's browser. ⚠ UseShellExecute, or .NET tries to run the URL
+    /// as a program and nothing happens.
+    /// </summary>
+    private static void OpenLink(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning($"Could not open {url}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Coloured text that wraps. ⚠ Plain TextColored runs off the window edge, and the
+    /// messages most worth reading are the long ones — an error clipped mid-sentence is
+    /// barely better than no error at all.
+    /// </summary>
+    private static void ErrorText(string text, float indent = 0f)
+    {
+        if (indent > 0f) ImGui.Indent(indent);
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.5f, 0.45f, 1f));
+        ImGui.TextWrapped(text);
+        ImGui.PopStyleColor();
+        if (indent > 0f) ImGui.Unindent(indent);
+    }
+
+    /// <summary>Trim a link for display; the middle of a paste URL carries no information.</summary>
+    private static string Shorten(string url)
+        => url.Length <= 46 ? url : url[..28] + "..." + url[^12..];
+
+    /// <summary>Panel-left in world terms, for the nudge buttons.</summary>
+    private static Vector3 LeftOf(ScreenPlacement s)
+    {
+        var ax = s.AxisX;
+        return ax.LengthSquared() < 1e-6f ? Vector3.UnitX : -Vector3.Normalize(ax);
+    }
+}

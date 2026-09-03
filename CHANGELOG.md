@@ -4,6 +4,50 @@ All of this shipped on 2026-09-01, in one evening, with Bunny and Q testing live
 reasons matter more than the version numbers — most of these are bugs that only appear
 when a second person uses the thing.
 
+## 0.5.0 — the interface pass
+
+**Three windows, one job each.** The old single window had grown into a settings page with a
+room list and a screen editor inside it, and the daily thing was paying a tax for the
+once-a-month thing on every visit.
+
+- **Main** — sharing. Your company's code featured at the top, the rooms you follow below.
+- **Settings** — a left-hand list rather than tabs: General, Interface, Company, Storage,
+  Something looks wrong. Room to add audio and video without touching anything else, which
+  was the actual reason to split it now rather than later.
+- **Arrange** — everything about a screen. Opens from a button, or by itself when you enter
+  the game's own furnishing layout mode: a screen is furniture, so the moment you are moving
+  furniture is the moment you might move one.
+
+**Shaped after a Mare client**, deliberately. That is a layout every FFXIV player already
+holds in their head, so the least technical person learns **no new concepts** — a featured
+code, a list of what you follow, a pause and a menu on each row.
+
+- **A paste box** instead of "add an empty row, now type in it". Somebody has just been handed
+  a code in a tell; paste, enter, done.
+- **Click a room to copy its code, right-click to name it.** Play/pause and a menu as icon
+  buttons.
+- **Pause** keeps the code and keeps refreshing but shows nothing — the reversible answer to
+  "not right now", where removing means being given the code again.
+- **Declare your own rooms** so their codes sit at the top with the company's, ready to hand
+  out. ⚠ Nothing is checked: a false claim only moves a code from one list to another.
+
+**Words people actually use.** *Fit height to image* is "Match the picture's shape", *opacity*
+is "See-through", yaw/pitch/roll are Turn/Tilt/Lean, and *16:9* is "Widescreen TV (16:9)" —
+the number kept for the person running a board, the meaning added for everyone else.
+
+**Surfaces have names, not four sliders**: Backlit screen, Matte poster, Faded sign, Stone
+tablet. These were never image correction; they decide what kind of object the panel is.
+
+**Depth works on panels that fit their picture.** The slider sat inside an unrelated condition,
+so the one setting that makes a panel read as an object rather than a decal was missing for
+anyone using the default.
+
+**Reverse depth is gone.** Not defaulted off — removed. Its other position is never correct:
+it inverts the test so panels appear *only* where a wall blocks them.
+
+**Screens cannot be moved where you cannot build**, matching placement. ⭐ Verified per *room*,
+not per plot — the FC master standing in a member's private chamber is correctly refused.
+
 ## 0.4.5
 
 **The editor no longer opens itself when you log in.** It had been doing so behind a config

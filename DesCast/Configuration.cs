@@ -61,6 +61,46 @@ public class Configuration : IPluginConfiguration
     public List<string> BuilderEntries { get; set; } = new();
 
     /// <summary>
+    /// Friendly names for rooms, keyed by their code.
+    ///
+    /// ⭐⭐ Kept beside the list rather than inside it, so an existing configuration needs
+    /// no migration and a name is simply absent until someone sets one. Borrowed from
+    /// Snowcloak, where right-clicking a pair renames it — the model people already have.
+    /// A code identifies a room; a name is what you call it.
+    /// </summary>
+    public Dictionary<string, string> RoomNames { get; set; } = new();
+
+    /// <summary>
+    /// Rooms the user says are theirs, shown at the top with the company's rather than in
+    /// the list of rooms they follow.
+    ///
+    /// ⚠⚠ **Nothing is checked, deliberately.** Mare knows your code because its server
+    /// issued it; we cannot know yours, so you tell us — and there is nothing to verify
+    /// against and nothing at stake. Chris, 2026-09-02: *"if they falsely declare a room all
+    /// that happens is they have a code at the top instead of the bottom list lol."* A
+    /// validation step here would cost every honest person a hoop for no protection at all.
+    ///
+    /// ⭐ It also closes the one place the Mare metaphor leaked: after publishing a room you
+    /// paste the code back once, and from then on you have something to hand people.
+    /// </summary>
+    public List<OwnRoom> MyRooms { get; set; } = new();
+
+    /// <summary>
+    /// Rooms temporarily switched off, keyed by code.
+    ///
+    /// ⭐ The gentle answer to "I do not want to see this right now", which is otherwise
+    /// only reachable by removing the room and having to be given the code again. Snowcloak
+    /// pauses a pair for exactly this reason.
+    /// </summary>
+    public Dictionary<string, bool> RoomPaused { get; set; } = new();
+
+    public string NameFor(string code)
+        => RoomNames.TryGetValue(code, out var n) && !string.IsNullOrWhiteSpace(n) ? n : string.Empty;
+
+    public bool IsPaused(string code)
+        => RoomPaused.TryGetValue(code, out var p) && p;
+
+    /// <summary>
     /// Screen links found on the Free Company board, cached.
     ///
     /// ⭐ Kept separate from <see cref="ManifestUrls"/> rather than merged into it. The
@@ -100,13 +140,10 @@ public class Configuration : IPluginConfiguration
     /// toggle so the answer can be established in one click in-game instead of guessed
     /// at here.
     /// </summary>
-    public bool ReverseDepth { get; set; } = true;
-
     /// <summary>
-    /// Draw the panel with no depth test at all. Useful once, to separate "the geometry
-    /// is wrong" from "the occlusion is wrong" — if a screen appears with this on and
-    /// vanishes with it off, placement is fine and <see cref="ReverseDepth"/> is the
-    /// suspect.
+    /// Draw the panel with no depth test at all — for finding a screen you cannot see.
+    /// If it appears with this on and vanishes with it off, the panel is where you put it
+    /// and something is standing in front of it.
     /// </summary>
     public bool DisableOcclusion { get; set; } = false;
 
@@ -119,6 +156,18 @@ public class Configuration : IPluginConfiguration
     /// the picture intact and the interface hidden anyway.
     /// </summary>
     public bool AvoidGameUi { get; set; } = true;
+
+    /// <summary>
+    /// Whether to show the company room-list tools.
+    ///
+    /// ⚠ Off by default because almost nobody has any business there — Chris, 2026-09-02:
+    /// *"90% of users are not going to have any permissions."* ⚠⚠ Deliberately a claim the
+    /// user makes about themselves rather than a game rank check: rank does not decide who
+    /// does this job, a check would be wrong for the FC that delegates it and for a venue
+    /// with no company at all, and there is nothing to protect — publishing is a paste
+    /// either way.
+    /// </summary>
+    public bool AdminMode { get; set; } = false;
 
     /// <summary>Show the placement editor on load. Off by default once things settle.</summary>
     /// <summary>
@@ -140,4 +189,29 @@ public class Configuration : IPluginConfiguration
     public void Initialise(IDalamudPluginInterface pi) => pluginInterface = pi;
 
     public void Save() => pluginInterface!.SavePluginConfig(this);
+}
+
+/// <summary>One of the user's own rooms: what kind of place it is, and its code.</summary>
+public sealed class OwnRoom
+{
+    /// <summary>Index into <see cref="Kinds"/>. Only decides the default label.</summary>
+    public int Kind { get; set; }
+
+    public string Code { get; set; } = string.Empty;
+
+    /// <summary>
+    /// ⭐ A short fixed list rather than a free-text field. Picking from four words is a
+    /// thing anybody can do; naming a category is a small piece of writing, and it is the
+    /// sort of blank box that stops somebody who is not confident. A custom name is still
+    /// available by renaming the row afterwards.
+    /// </summary>
+    public static readonly string[] Kinds =
+    {
+        "My home",
+        "My private chambers",
+        "My apartment",
+        "My venue",
+    };
+
+    public string Label => Kind >= 0 && Kind < Kinds.Length ? Kinds[Kind] : Kinds[0];
 }

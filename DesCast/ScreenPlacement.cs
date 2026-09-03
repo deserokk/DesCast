@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Newtonsoft.Json;
@@ -65,17 +65,21 @@ public class ScreenPlacement
     /// </summary>
     public static readonly (string Name, float W, float H)[] AspectPresets =
     {
-        ("16:9  widescreen",     16f, 9f),
-        ("21:9  cinema",         21f, 9f),
-        ("4:3  classic",          4f, 3f),
-        ("1:1  square",           1f, 1f),
-        ("3:1  banner",           3f, 1f),
-        ("9:16  kiosk",           9f, 16f),
-        ("3:4  portrait",         3f, 4f),
-        ("2:3  poster",           2f, 3f),
-        ("A4 portrait",         210f, 297f),
-        ("A4 landscape",        297f, 210f),
-        ("Letter portrait",     8.5f, 11f),
+        // ⭐⭐ The object first, the ratio second. "16:9" means nothing to somebody who does
+        // not already know it; "Widescreen TV" means something to everyone. The numbers stay
+        // because an officer running a board still needs to tell contributors what to crop
+        // to — they are just no longer the part you have to understand.
+        ("Widescreen TV  (16:9)",      16f, 9f),
+        ("Cinema screen  (21:9)",      21f, 9f),
+        ("Old TV  (4:3)",               4f, 3f),
+        ("Square  (1:1)",               1f, 1f),
+        ("Long banner  (3:1)",          3f, 1f),
+        ("Phone / standee  (9:16)",     9f, 16f),
+        ("Tall picture  (3:4)",         3f, 4f),
+        ("Movie poster  (2:3)",         2f, 3f),
+        ("Sheet of paper, upright",   210f, 297f),
+        ("Sheet of paper, sideways",  297f, 210f),
+        ("US Letter, upright",        8.5f, 11f),
     };
 
     /// <summary>

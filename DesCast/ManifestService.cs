@@ -217,13 +217,23 @@ public sealed class ManifestService
 
     private void Reflatten()
     {
-        var total = 0;
-        foreach (var sub in subscriptions.Values) total += sub.Screens.Count;
+        var all = new List<ScreenPlacement>();
 
-        var all = new List<ScreenPlacement>(total);
-        foreach (var sub in subscriptions.Values) all.AddRange(sub.Screens);
+        foreach (var (url, sub) in subscriptions)
+        {
+            // ⭐ A paused room keeps its subscription and keeps refreshing — it simply
+            // stops contributing screens. Pausing is meant to be the reversible answer to
+            // "not right now", so the code must survive it; removing the room is the
+            // irreversible one, and it costs being given the code again.
+            if (config.IsPaused(url)) continue;
+            all.AddRange(sub.Screens);
+        }
+
         Screens = all;
     }
+
+    /// <summary>Recompute after something outside changed which rooms count. For the pause toggle.</summary>
+    public void RefreshFlattened() => Reflatten();
 
     private async Task RefreshAsync(string url, Subscription sub)
     {
